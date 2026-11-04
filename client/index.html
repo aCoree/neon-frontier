@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>NEON FRONTIER – 3D Multiplayer Shooter</title>
+<meta name="description" content="NEON FRONTIER: Ein 3D-Multiplayer-Shooter im Browser. Spiel mit Freunden per Link.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230b1220'/><path d='M14 48V16l36 32V16' fill='none' stroke='%237ee8ff' stroke-width='6' stroke-linejoin='round'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="dmg-layer"></div>
+
+<div id="loading">
+  <div class="logo big"><span>NEON</span><b>FRONTIER</b></div>
+  <div class="bar"><i id="load-bar"></i></div>
+  <div id="load-text">Starte …</div>
+  <div id="load-err"></div>
+</div>
+
+<!-- ================= HAUPTMENÜ ================= -->
+<section id="s-menu" class="screen">
+  <div class="menu-left">
+    <div class="logo"><span>NEON</span><b>FRONTIER</b><small>3D MULTIPLAYER SHOOTER</small></div>
+    <nav class="menu-btns">
+      <button class="mbtn" data-go="solo"><i>▶</i><span>Spielen<small>Solo gegen Bots</small></span></button>
+      <button class="mbtn" data-go="multi"><i>◈</i><span>Multiplayer<small>Mit Freunden online</small></span></button>
+      <button class="mbtn" data-act="private"><i>⚿</i><span>Private Lobby<small>Raum + Einladungslink</small></span></button>
+      <button class="mbtn" data-act="training"><i>◎</i><span>Training<small>Schießstand &amp; alle Waffen</small></span></button>
+      <button class="mbtn" data-go="skins"><i>✦</i><span>Skins<small>Charaktere &amp; Waffen</small></span></button>
+      <button class="mbtn" data-go="ach"><i>★</i><span>Erfolge<small id="ach-count">0 / 14</small></span></button>
+      <button class="mbtn" data-go="settings"><i>⚙</i><span>Einstellungen<small>Grafik, Audio, Steuerung</small></span></button>
+    </nav>
+    <div class="menu-foot">WASD · Maus · Leertaste · Shift · C · Q (Dash) · F (Gadget) · Tab · <a href="#" id="link-help">Alle Tasten</a></div>
+  </div>
+  <div class="profile-chip" id="profile-chip">
+    <div class="pc-name" id="pc-name">Spieler</div>
+    <div class="pc-lvl"><span id="pc-level">1</span><div class="pc-bar"><i id="pc-xp"></i></div><small id="pc-xptxt">0 / 0 XP</small></div>
+    <button class="link" id="pc-rename">Name ändern</button>
+  </div>
+</section>
+
+<!-- ================= NAME ================= -->
+<section id="s-name" class="screen modal">
+  <div class="panel narrow">
+    <h2>Willkommen, Pilot!</h2>
+    <p class="sub">Wie sollen dich deine Freunde nennen?</p>
+    <input id="name-input" maxlength="14" placeholder="Dein Name" autocomplete="off" spellcheck="false">
+    <div class="row end"><button class="btn primary" id="name-ok">Los geht’s</button></div>
+  </div>
+</section>
+
+<!-- ================= SOLO ================= -->
+<section id="s-solo" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Gegen Bots spielen</h2></header>
+    <div class="grid2">
+      <div>
+        <h4>Spielmodus</h4>
+        <div class="cards" id="solo-modes"></div>
+      </div>
+      <div>
+        <h4>Schwierigkeit</h4>
+        <div class="seg" id="solo-diff"><button data-v="easy">Einfach</button><button data-v="normal" class="on">Normal</button><button data-v="hard">Schwer</button></div>
+        <h4>Gegner (nur FFA / Team Deathmatch)</h4>
+        <div class="slider"><input type="range" id="solo-bots" min="1" max="11" value="5"><b id="solo-bots-v">5</b></div>
+        <h4>Matchdauer</h4>
+        <div class="seg" id="solo-time"><button data-v="3">3 min</button><button data-v="6" class="on">6 min</button><button data-v="10">10 min</button></div>
+        <h4>Tageszeit</h4>
+        <div class="seg" id="solo-tod"><button data-v="day" class="on">Tag</button><button data-v="sunset">Abend</button><button data-v="night">Nacht</button><button data-v="dynamic">Dynamisch</button></div>
+        <div class="row end"><button class="btn primary big" id="solo-start">Match starten</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= MULTIPLAYER ================= -->
+<section id="s-multi" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Multiplayer</h2><div class="srv" id="srv-status"><i></i><span>Server wird geprüft …</span></div></header>
+    <div class="grid2">
+      <div>
+        <h4>Raum erstellen</h4>
+        <label class="chk"><input type="checkbox" id="mp-public"> Öffentlich in der Raumliste anzeigen</label>
+        <button class="btn primary big" id="mp-create">Raum erstellen</button>
+        <p class="hint">Du bekommst einen 4-stelligen Code und einen Einladungslink für deine Freunde.</p>
+        <h4>Per Code beitreten</h4>
+        <div class="row"><input id="mp-code" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false"><button class="btn primary" id="mp-join">Beitreten</button></div>
+      </div>
+      <div>
+        <h4>Öffentliche Räume <button class="link" id="mp-refresh">Aktualisieren</button></h4>
+        <div class="rooms" id="mp-rooms"><div class="empty">Keine öffentlichen Räume gefunden.</div></div>
+        <h4>Server</h4>
+        <div class="row"><input id="mp-server" placeholder="ws://… (leer = automatisch)" spellcheck="false"><button class="btn" id="mp-server-save">Speichern</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LOBBY ================= -->
+<section id="s-lobby" class="screen">
+  <div class="panel full">
+    <header><button class="back" id="lobby-leave">‹ Verlassen</button><h2>Lobby</h2>
+      <div class="invite"><span>Raumcode</span><b id="lobby-code">----</b><button class="btn small" id="lobby-copy">Einladungslink kopieren</button></div></header>
+    <div class="lobby-grid">
+      <div class="lobby-col">
+        <h4>Spieler <small id="lobby-count"></small></h4>
+        <div id="lobby-teams"></div>
+        <div class="row"><button class="btn small" id="lobby-shuffle">Teams automatisch zuteilen</button></div>
+        <h4>Chat</h4>
+        <div class="chatbox" id="lobby-chat"></div>
+        <div class="row"><input id="lobby-chat-in" placeholder="Nachricht … (Enter)" maxlength="120" autocomplete="off"></div>
+      </div>
+      <div class="lobby-col">
+        <h4>Spielmodus <small id="lobby-hostnote"></small></h4>
+        <div class="cards small" id="lobby-modes"></div>
+        <div class="settings-grid">
+          <label>Bots<div class="slider"><input type="range" id="lb-bots" min="0" max="11" value="3"><b id="lb-bots-v">3</b></div></label>
+          <label>Schwierigkeit<div class="seg" id="lb-diff"><button data-v="easy">Einfach</button><button data-v="normal">Normal</button><button data-v="hard">Schwer</button></div></label>
+          <label>Zeitlimit<div class="seg" id="lb-time"><button data-v="3">3</button><button data-v="6">6</button><button data-v="10">10</button><button data-v="15">15 min</button></div></label>
+          <label>Punktelimit<div class="seg" id="lb-score"><button data-v="0">Standard</button><button data-v="10">10</button><button data-v="25">25</button><button data-v="50">50</button></div></label>
+          <label>Tageszeit<div class="seg" id="lb-tod"><button data-v="day">Tag</button><button data-v="sunset">Abend</button><button data-v="night">Nacht</button><button data-v="dynamic">Dyn.</button></div></label>
+          <label class="chk"><input type="checkbox" id="lb-fill"> Freie Plätze mit Bots füllen</label>
+        </div>
+        <div class="row end"><span id="lobby-wait" class="hint"></span><button class="btn primary big" id="lobby-start">Match starten</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SKINS ================= -->
+<section id="s-skins" class="screen">
+  <div class="skins-left panel">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Skins</h2></header>
+    <h4>Charaktere</h4><div class="skin-grid" id="skin-grid"></div>
+    <h4>Waffen-Skins</h4><div class="skin-grid small" id="wskin-grid"></div>
+    <h4>Vorschau-Waffe</h4><div class="seg wrap" id="skin-weapon"></div>
+    <p class="hint">Skins sind rein kosmetisch und geben keinen Vorteil. Neue Skins schaltest du durch Level-Aufstiege frei.</p>
+  </div>
+</section>
+
+<!-- ================= ERFOLGE ================= -->
+<section id="s-ach" class="screen"><div class="panel wide"><header><button class="back" data-back>‹ Zurück</button><h2>Erfolge</h2></header><div class="ach-grid" id="ach-grid"></div><div class="statline" id="stat-line"></div></div></section>
+
+<!-- ================= EINSTELLUNGEN ================= -->
+<section id="s-settings" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Einstellungen</h2></header>
+    <div class="grid2">
+      <div>
+        <h4>Grafik</h4>
+        <div class="seg" id="set-quality"><button data-v="low">Niedrig</button><button data-v="medium">Mittel</button><button data-v="high">Hoch</button><button data-v="ultra">Ultra</button></div>
+        <p class="hint">Ultra aktiviert Ambient Occlusion &amp; 4K-Schatten. Gras-Dichte und Lichter werden nach einem Neuladen übernommen.</p>
+        <label class="rowlbl">Sichtfeld (FOV)<div class="slider"><input type="range" id="set-fov" min="60" max="100" step="1"><b id="set-fov-v"></b></div></label>
+        <label class="rowlbl">Kamera-Wackeln<div class="slider"><input type="range" id="set-shake" min="0" max="1" step="0.1"><b id="set-shake-v"></b></div></label>
+        <label class="chk"><input type="checkbox" id="set-dmg"> Schadenszahlen anzeigen</label>
+      </div>
+      <div>
+        <h4>Steuerung</h4>
+        <label class="rowlbl">Maus-Empfindlichkeit<div class="slider"><input type="range" id="set-sens" min="0.2" max="3" step="0.05"><b id="set-sens-v"></b></div></label>
+        <label class="chk"><input type="checkbox" id="set-invert"> Y-Achse invertieren</label>
+        <h4>Audio</h4>
+        <label class="rowlbl">Gesamt<div class="slider"><input type="range" id="set-master" min="0" max="1" step="0.05"><b></b></div></label>
+        <label class="rowlbl">Musik<div class="slider"><input type="range" id="set-music" min="0" max="1" step="0.05"><b></b></div></label>
+        <label class="rowlbl">Effekte<div class="slider"><input type="range" id="set-sfx" min="0" max="1" step="0.05"><b></b></div></label>
+        <label class="rowlbl">Umgebung<div class="slider"><input type="range" id="set-ambient" min="0" max="1" step="0.05"><b></b></div></label>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HILFE ================= -->
+<section id="s-help" class="screen modal">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Steuerung &amp; Items</h2></header>
+    <div class="grid2 help">
+      <table>
+        <tr><td>W A S D</td><td>Bewegen</td></tr><tr><td>Maus</td><td>Umsehen</td></tr><tr><td>Linke Maustaste</td><td>Schießen</td></tr><tr><td>Rechte Maustaste</td><td>Zielen (Visier / Zoom)</td></tr>
+        <tr><td>Shift</td><td>Sprinten</td></tr><tr><td>Leertaste</td><td>Springen (2× = Doppelsprung, mit Jetpack halten)</td></tr><tr><td>C / Strg</td><td>Ducken</td></tr><tr><td>Q</td><td>Dash / Ausweichen</td></tr>
+        <tr><td>R</td><td>Nachladen</td></tr><tr><td>1–5 / Mausrad</td><td>Waffe wechseln</td></tr><tr><td>E</td><td>Interagieren (Kisten, Schalter, Geheimnisse)</td></tr>
+      </table>
+      <table>
+        <tr><td>Z</td><td>Medkit (+55 Leben)</td></tr><tr><td>X</td><td>Schildtrank (+50 Schild)</td></tr><tr><td>G</td><td>Splittergranate werfen</td></tr><tr><td>H</td><td>Rauchbombe werfen</td></tr>
+        <tr><td>F</td><td>Gadget: Enterhaken · Teleporter · Drohne · Scanner</td></tr><tr><td>Leertaste (halten)</td><td>Jetpack</td></tr><tr><td>Tab</td><td>Punktetafel</td></tr><tr><td>Enter</td><td>Chat</td></tr><tr><td>Esc</td><td>Pause / Maus freigeben</td></tr>
+        <tr><td colspan="2" class="hint">Tipp: Sprungplattformen (grün), Teleporter, Aufzüge, Schalter und versteckte Kisten verstecken sich überall auf der Karte. Es gibt 7 geheime Daten-Kerne, eine goldene Ente … und einen roten Knopf, den man nicht drücken sollte.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HUD ================= -->
+<section id="hud" class="screen hudscreen">
+  <div class="h-top">
+    <div class="h-timer"><div id="h-time">0:00</div><div id="h-mode"></div></div>
+    <div class="h-scores" id="h-scores"></div>
+  </div>
+  <div class="h-mini"><canvas id="minimap" width="360" height="360"></canvas><div id="h-zone"></div></div>
+  <div class="h-feed" id="feed"></div>
+  <div class="h-chat" id="chatlog"></div>
+  <input id="chat-in" maxlength="120" placeholder="Nachricht …" autocomplete="off">
+  <div class="h-cross" id="cross"><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i><i class="d"></i><div class="hm" id="hitmarker"></div></div>
+  <div class="scope" id="scope"></div>
+  <div id="dirs"></div>
+  <div class="h-prompt" id="prompt"></div>
+  <div class="h-banner" id="banner"></div>
+  <div class="h-killbanner" id="killbanner"></div>
+  <div class="h-count" id="countdown"></div>
+  <div class="h-vitals">
+    <div class="h-pw" id="pw"></div>
+    <div class="bar-shield"><i id="b-shield"></i><b id="n-shield">0</b></div>
+    <div class="bar-hp"><i id="b-hp"></i><b id="n-hp">100</b></div>
+  </div>
+  <div class="h-weapon">
+    <div class="slots" id="slots"></div>
+    <div class="wname" id="wname"></div>
+    <div class="ammo"><b id="a-mag">0</b><span id="a-res">/ 0</span></div>
+    <div class="reload" id="reloadbar"><i></i></div>
+  </div>
+  <div class="h-items" id="items"></div>
+  <div class="h-info"><span id="h-ping"></span><span id="h-fps"></span></div>
+  <div class="h-death" id="death"><div class="dd-title">ELIMINIERT</div><div class="dd-by" id="dd-by"></div><div class="dd-timer" id="dd-timer"></div></div>
+  <div class="scoreboard" id="scoreboard"></div>
+</section>
+
+<div id="pause" class="overlay">
+  <div class="panel narrow"><h2>Pausiert</h2>
+    <p class="sub" id="pause-sub">Das Spiel läuft weiter.</p>
+    <div class="col"><button class="btn primary big" id="pause-resume">Fortsetzen</button><button class="btn" id="pause-settings">Einstellungen</button><button class="btn" id="pause-help">Steuerung</button><button class="btn danger" id="pause-leave">Match verlassen</button></div>
+  </div>
+</div>
+
+<div id="results" class="overlay">
+  <div class="panel wide res">
+    <div class="res-banner" id="res-banner">SIEG</div>
+    <div class="res-sub" id="res-sub"></div>
+    <div class="res-grid"><div id="res-board"></div><div><div class="res-xp" id="res-xp"></div><div id="res-ach"></div></div></div>
+    <div class="row end"><button class="btn" id="res-menu">Hauptmenü</button><button class="btn primary big" id="res-lobby">Zur Lobby</button></div>
+  </div>
+</div>
+
+<div id="clickhint" class="overlay clear"><div class="clickhint">Klicke ins Spiel, um die Maus zu steuern<br><small>Esc = Pause</small></div></div>
+<div id="conn"></div>
+<div id="toasts"></div>
+<div id="lvlup"></div>
+<div id="achv-pop"></div>
+<div id="portrait-warn">Bitte Gerät drehen – NEON FRONTIER braucht Tastatur &amp; Maus (Desktop-Browser).</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

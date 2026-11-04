@@ -1,0 +1,730 @@
+// Autoritative Raum-Simulation: Lobby, Match, Treffer, Projektile, Pickups, Türen, Events. Läuft auf dem Node-Server UND (offline) im Browser.
+import { WEAPONS, THROWABLES, CONSUMABLES, POWERUPS, GADGETS, MODES, TEAMS, DIFFS, PLAYER, START_LOADOUT, NET, FL, LOOT, AMMO_GIVE } from '../defs.js';
+import { World, rayCylinder } from '../world.js';
+import { buildMap, moverY } from '../mapdata.js';
+import { spreadDirs, mulberry32, clamp, lerp } from '../util.js';
+import { Nav } from './nav.js';
+import { Bots } from './bots.js';
+
+const R_BODY = 0.42, H_STAND = 1.8, H_CROUCH = 1.25;
+const r2 = (v) => Math.round(v * 100) / 100;
+const clean = (s, n = 16) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
+let idc = 1;
+
+export class Room {
+  constructor(code, opts = {}) {
+    this.code = code; this.members = new Map(); this.ents = new Map(); this.state = 'lobby'; this.hostId = null;
+    this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, ...(opts.settings || {}) };
+    this.local = !!opts.local;
+    this.T = 0; this.last = Date.now(); this.tickN = 0; this.ev = []; this.emptyAt = 0;
+    this.rng = mulberry32((Date.now() & 0xffffff) ^ 0x5bd1e995);
+    this.nextId = 1; this.projs = []; this.dyn = []; this.smokes = []; this.drones = []; this.supplies = [];
+    this.lowgravUntil = 0; this.endAt = 0; this.startAt = 0; this.matchEnd = 0; this.lastClock = 0;
+    this.map = buildMap(true); this.world = new World(this.map);
+    this.nav = Nav.for(this.world);
+    this.bots = new Bots(this);
+    this.doorsById = new Map(this.map.doors.map(d => [d.id, d]));
+    this.chestState = new Map(this.map.chests.map(c => [c.id, { open: false, until: 0 }]));
+    this.switchState = new Map(this.map.switches.map(s => [s.id, { on: false }]));
+    this.pickups = this.map.pickups.map(p => ({ ...p, y: p.y ?? this.groundY(p.x, p.z), on: true, next: 0 }));
+    this.spawns = this.map.spawns.map(s => ({ ...s, y: s.y ?? undefined }));
+    for (const s of this.spawns) { const g = this.world.groundAt(s.x, s.z, (s.y ?? 80) + 0.5); s.y = g; }
+    this.spawns = this.spawns.filter(s => s.y > -30 && this.nav.isWalk(s.x, s.z) || s.y < -6 || (s.y > 8 && s.y < 60)); // ungültige Spawns in Wänden raus
+    this.surfaceSpawns = this.spawns.filter(s => this.nav.isWalk(s.x, s.z) && s.y > -3);
+    this.zoneFx = this.map.zonesFx || [];
+    this.lastHistT = 0;
+  }
+
+  groundY(x, z) { const t = this.world.terrain(x, z); return Math.max(t, this.world.groundAt(x, z, t + 1.2)); }
+  humans() { return [...this.members.values()].filter(m => m.connected); }
+  send(m, o) { if (m.connected && m.client) m.client.send(o); }
+  all(o) { for (const m of this.members.values()) this.send(m, o); }
+  emit(e) { this.ev.push(e); }
+
+  // =============== Lobby ===============
+  addMember(client, profile) {
+    const id = idc++;
+    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
+    this.members.set(id, m);
+    if (this.hostId == null || !this.members.get(this.hostId)?.connected) this.hostId = id;
+    this.emptyAt = 0;
+    this.send(m, { k: 'joined', code: this.code, you: id, token: m.token, host: this.hostId, state: this.state });
+    if (this.state === 'lobby') this.lobbyUpdate(); else this.lateJoin(m);
+    return m;
+  }
+  lobbyData() {
+    return { k: 'lobby', code: this.code, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level })) };
+  }
+  lobbyUpdate() { this.all(this.lobbyData()); }
+  removeMember(m, hard = true) {
+    if (hard) { m.connected = false; this.members.delete(m.id); if (m.ent) { this.killSilently(m.ent); this.ents.delete(m.ent.id); this.emit({ k: 'leave', id: m.ent.id }); } }
+    else { m.connected = false; m.dcAt = this.T; if (m.ent) m.ent.dcInvuln = true; }
+    if (this.hostId === m.id) { const n = this.humans()[0]; this.hostId = n ? n.id : null; }
+    if (!this.humans().length && !this.emptyAt) this.emptyAt = Date.now();
+    if (this.state === 'lobby') this.lobbyUpdate();
+    else this.all({ k: 'hostchg', host: this.hostId });
+  }
+  resume(m, client) {
+    m.client = client; m.connected = true; m.dcAt = 0; this.emptyAt = 0; if (m.ent) m.ent.dcInvuln = false;
+    if (this.hostId == null) this.hostId = m.id;
+    this.send(m, { k: 'joined', code: this.code, you: m.id, token: m.token, host: this.hostId, state: this.state, resumed: true });
+    if (this.state === 'lobby') this.lobbyUpdate(); else this.sendStart(m);
+  }
+
+  handle(m, msg) {
+    if (!msg || typeof msg.k !== 'string') return;
+    m.lastSeen = Date.now();
+    switch (msg.k) {
+      case 'ping': if (typeof msg.rtt === 'number') m.rtt = clamp(lerp(m.rtt, msg.rtt, 0.3), 0.01, 1); this.send(m, { k: 'pong', t: msg.t, T: this.T }); return;
+      case 'chat': { const t = clean(msg.text, 140); if (t) this.all({ k: 'chat', id: m.id, from: m.name, team: m.ent ? m.ent.team : m.team, text: t }); return; }
+      case 'profile': m.name = clean(msg.name, 14) || m.name; m.skin = msg.skin || m.skin; m.wskin = msg.wskin || m.wskin; m.level = msg.level | 0; if (this.state === 'lobby') this.lobbyUpdate(); return;
+      case 'set': return this.setSettings(m, msg.s || {});
+      case 'team': return this.setTeam(m, msg.team | 0, msg.target);
+      case 'shuffle': if (m.id === this.hostId && this.state === 'lobby') { for (const x of this.members.values()) x.team = -1; this.autoAssign(); this.lobbyUpdate(); } return;
+      case 'start': if (m.id === this.hostId && this.state === 'lobby') this.start(); return;
+      case 'kick': if (m.id === this.hostId && this.state === 'lobby') { const t = this.members.get(msg.id | 0); if (t && t.id !== m.id) { this.send(t, { k: 'kicked' }); this.removeMember(t, true); } } return;
+      case 'backlobby': if (m.id === this.hostId && this.state === 'ended') this.toLobby(); return;
+    }
+    const e = m.ent; if (!e || this.state === 'lobby') return;
+    switch (msg.k) {
+      case 'st': return this.onState(m, e, msg);
+      case 'fire': return this.onFire(m, e, msg);
+      case 'swap': if (WEAPONS[msg.w] && e.owned.includes(msg.w)) e.w = msg.w; return;
+      case 'reload': e.reloadUntil = this.T + 1; return;
+      case 'throw': return this.onThrow(m, e, msg);
+      case 'use': return this.onUse(m, e, msg);
+      case 'interact': return this.onInteract(m, e, msg);
+      case 'gadget': return this.onGadget(m, e, msg);
+      case 'dash': this.emit({ k: 'dash', id: e.id }); return;
+      case 'suicide': if (e.alive && !this.settings.training) this.damage(e, 9999, e, { w: 'fall' }); return;
+    }
+  }
+
+  setSettings(m, s) {
+    if (m.id !== this.hostId || this.state !== 'lobby') return;
+    const S = this.settings;
+    if (s.mode && MODES[s.mode]) { S.mode = s.mode; for (const x of this.members.values()) x.team = -1; }
+    if (s.bots !== undefined) S.bots = clamp(s.bots | 0, 0, 11);
+    if (s.diff && DIFFS[s.diff]) S.diff = s.diff;
+    if (s.scoreLimit !== undefined) S.scoreLimit = clamp(s.scoreLimit | 0, 0, 100);
+    if (s.timeLimit !== undefined) S.timeLimit = clamp(s.timeLimit | 0, 2, 20);
+    if (s.tod && ['day', 'sunset', 'night', 'dynamic'].includes(s.tod)) S.tod = s.tod;
+    if (s.fillBots !== undefined) S.fillBots = !!s.fillBots;
+    this.lobbyUpdate();
+  }
+  setTeam(m, team, targetId) {
+    if (this.state !== 'lobby') return;
+    const mode = MODES[this.settings.mode]; if (!mode.teams) return;
+    let who = m; if (targetId && m.id === this.hostId) who = this.members.get(targetId | 0) || m;
+    if (team < -1 || team >= mode.teams) return;
+    if (team >= 0 && mode.size) { const n = [...this.members.values()].filter(x => x.team === team && x !== who).length; if (n >= mode.size) return; }
+    who.team = team; this.lobbyUpdate();
+  }
+  autoAssign() {
+    const mode = MODES[this.settings.mode]; if (!mode.teams) return;
+    const cnt = new Array(mode.teams).fill(0);
+    for (const x of this.members.values()) if (x.team >= 0 && x.team < mode.teams) cnt[x.team]++; else x.team = -1;
+    for (const x of this.members.values()) {
+      if (x.team >= 0) continue;
+      let best = -1;
+      for (let t = 0; t < mode.teams; t++) if ((!mode.size || cnt[t] < mode.size) && (best < 0 || cnt[t] < cnt[best])) best = t;
+      if (best < 0) best = 0; x.team = best; cnt[best]++;
+    }
+  }
+
+  // =============== Matchstart ===============
+  start() {
+    const S = this.settings, mode = MODES[S.mode], humans = this.humans();
+    if (!humans.length) return;
+    if (humans.length > mode.max && !S.training) { this.send(this.members.get(this.hostId), { k: 'err', text: `Zu viele Spieler für ${mode.name} (max ${mode.max}).` }); return; }
+    this.ents.clear(); this.projs.length = 0; this.dyn.length = 0; this.smokes.length = 0; this.drones.length = 0; this.supplies.length = 0; this.ev.length = 0;
+    for (const p of this.pickups) { p.on = true; p.next = 0; }
+    for (const [, c] of this.chestState) { c.open = false; c.until = 0; }
+    for (const d of this.map.doors) { this.setDoor(d, false); d.locked = d.id === 'vault' || d.id === 'gateW' || d.id === 'subvault' || d.id === 'caveSecret'; }
+    for (const [, s] of this.switchState) s.on = false;
+    this.lowgravUntil = 0; this.T = 0; this.last = Date.now();
+    if (mode.teams) this.autoAssign();
+    for (const m of humans) {
+      const e = this.newEnt({ name: m.name, skin: m.skin, wskin: m.wskin, team: mode.teams ? m.team : -1, member: m, level: m.level });
+      m.ent = e;
+    }
+    // Bots auffüllen
+    let nb = 0;
+    if (S.training) nb = 0;
+    else if (mode.teams && mode.size) {
+      if (S.fillBots) { const cnt = new Array(mode.teams).fill(0); for (const e of this.ents.values()) cnt[e.team]++; for (let t = 0; t < mode.teams; t++) while (cnt[t] < mode.size) { this.addBot(t); cnt[t]++; nb++; } }
+    } else {
+      const room = mode.max - humans.length; nb = Math.min(S.bots, room);
+      const cnt = new Array(Math.max(1, mode.teams)).fill(0); for (const e of this.ents.values()) if (e.team >= 0) cnt[e.team]++;
+      for (let i = 0; i < nb; i++) { let t = -1; if (mode.teams) { t = cnt.indexOf(Math.min(...cnt)); cnt[t]++; } this.addBot(t); }
+    }
+    if (S.training) {
+      const pts = (this.zoneFx.find(z => z.id === 'dummies') || { pts: [] }).pts;
+      pts.forEach((p, i) => { const b = this.addBot(-1, { dummy: true, home: p }); b.dummy = true; });
+    }
+    for (const e of this.ents.values()) this.spawnEnt(e, true);
+    this.state = 'countdown'; this.startAt = this.T + (S.training ? 1.5 : 4);
+    const limit = S.scoreLimit || mode.score; this.scoreLimit = limit; this.matchEnd = 0;
+    this.nextSupply = this.startAt + 70; this.timeLimit = S.timeLimit * 60;
+    this.hour0 = { day: 13, sunset: 18.4, night: 23, dynamic: 8 + Math.random() * 10 }[S.tod] ?? 13;
+    for (const m of humans) this.sendStart(m);
+  }
+  sendStart(m) {
+    const S = this.settings;
+    this.send(m, {
+      k: 'start', you: m.ent ? m.ent.id : null, settings: S, T: this.T, startAt: this.startAt, hour0: this.hour0, scoreLimit: this.scoreLimit, timeLimit: this.timeLimit,
+      ents: [...this.ents.values()].map(e => this.entInfo(e)), pickups: this.pickups.filter(p => !p.on).map(p => p.id), dyn: this.dyn.map(d => this.dynInfo(d)),
+      doors: this.map.doors.map(d => [d.id, d.open ? 1 : 0, d.locked ? 1 : 0]), chests: [...this.chestState].filter(([, c]) => c.open).map(([id]) => id), switches: [...this.switchState].filter(([, s]) => s.on).map(([id]) => id),
+      lowgrav: this.lowgravUntil, scores: this.scores(), state: this.state, shards: m.ent ? [...m.ent.shardSet] : [],
+    });
+    if (m.ent) this.sendInv(m.ent);
+  }
+  entInfo(e) { return { id: e.id, name: e.name, skin: e.skin, wskin: e.wskin, team: e.team, bot: e.isBot ? 1 : 0, level: e.level, k: e.kills, d: e.deaths, sc: e.score, diff: e.diff }; }
+  lateJoin(m) {
+    const mode = MODES[this.settings.mode];
+    if (this.state === 'ended') { this.send(m, { k: 'err', text: 'Das Match ist gerade zu Ende.' }); }
+    let team = -1;
+    if (mode.teams) { const cnt = new Array(mode.teams).fill(0); for (const e of this.ents.values()) if (e.team >= 0) cnt[e.team]++; team = cnt.indexOf(Math.min(...cnt)); }
+    // einen Bot ersetzen, falls vorhanden
+    const bot = [...this.ents.values()].find(e => e.isBot && !e.dummy && (team < 0 || e.team === team)) || [...this.ents.values()].find(e => e.isBot && !e.dummy);
+    if (bot) { this.ents.delete(bot.id); this.emit({ k: 'leave', id: bot.id }); if (bot.team >= 0) team = bot.team; }
+    m.team = team;
+    const e = this.newEnt({ name: m.name, skin: m.skin, wskin: m.wskin, team, member: m, level: m.level }); m.ent = e;
+    this.spawnEnt(e, true);
+    this.emit({ k: 'join', e: this.entInfo(e) });
+    this.sendStart(m);
+  }
+  toLobby() {
+    this.state = 'lobby'; this.ents.clear(); this.projs.length = 0; this.dyn.length = 0;
+    for (const m of this.members.values()) m.ent = null;
+    for (const [id, m] of [...this.members]) if (!m.connected) this.members.delete(id);
+    this.lobbyUpdate();
+  }
+
+  newEnt(o) {
+    const id = o.bot ? 'b' + (this.nextId++) : 'p' + (o.member ? o.member.id : this.nextId++);
+    const e = {
+      id, name: o.name, skin: o.skin, wskin: o.wskin || 'default', team: o.team ?? -1, isBot: !!o.bot, member: o.member || null, level: o.level | 0,
+      x: 0, y: 0, z: 0, yaw: 0, pitch: 0, fl: 0, w: 'viper', vx: 0, vy: 0, vz: 0, hp: 100, shield: 0, alive: false, respawnAt: 0,
+      kills: 0, deaths: 0, score: 0, streak: 0, best: 0, hs: 0, dmgDealt: 0, owned: [...START_LOADOUT], cons: { medkit: 1, shieldpot: 0, grenade: 1, smoke: 0 }, gadget: null, gadCd: {},
+      lastFire: {}, power: {}, barrier: 0, barrierUntil: 0, spawnInv: 0, hist: [], shardSet: new Set(), chests: 0, lastUse: 0, crouch: false, reloadUntil: 0, lastSt: 0, beamAcc: {}, beamT: 0, dcInvuln: false, assists: {}, lastDmgFrom: null,
+    };
+    this.ents.set(id, e); return e;
+  }
+  addBot(team, o = {}) {
+    const names = ['Axiom', 'Blitz', 'Cipher', 'Dynamo', 'Echo', 'Flux', 'Gizmo', 'Havoc', 'Ion', 'Jolt', 'Kilo', 'Lynx', 'Mako', 'Nova', 'Onyx', 'Pixel', 'Quasar', 'Rogue', 'Spark', 'Turbo', 'Vector', 'Warden', 'Zephyr'];
+    const used = new Set([...this.ents.values()].map(e => e.name));
+    const free = names.filter(n => !used.has('[BOT] ' + n));
+    let name = free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot' + this.nextId;
+    if (o.dummy) name = 'Zielpuppe';
+    const skins = ['vanguard', 'ember', 'verdant', 'phantom', 'solaris', 'frost', 'rogue', 'samurai'];
+    const e = this.newEnt({ name: '[BOT] ' + name, skin: skins[Math.floor(this.rng() * skins.length)], team, bot: true, level: 1 + Math.floor(this.rng() * 12) });
+    e.diff = this.settings.diff; e.home = o.home || null; e.dummy = !!o.dummy;
+    this.bots.init(e);
+    return e;
+  }
+
+  // =============== Spawning ===============
+  pickSpawn(e) {
+    const pool = this.settings.training && !e.isBot ? this.spawns.filter(s => s.x < -90 && s.z > 80) : (e.isBot ? this.surfaceSpawns : this.spawns);
+    if (!pool.length) return { x: 0, y: 1, z: 0, yaw: 0 };
+    const enemies = [...this.ents.values()].filter(o => o !== e && o.alive && (o.team < 0 || o.team !== e.team));
+    const scored = pool.map(s => { let md = 9999; for (const o of enemies) md = Math.min(md, Math.hypot(o.x - s.x, o.z - s.z) + Math.abs(o.y - s.y) * 0.5); return { s, md: enemies.length ? md : this.rng() * 100 }; });
+    scored.sort((a, b) => b.md - a.md);
+    const top = scored.slice(0, Math.max(1, Math.min(5, scored.length)));
+    return top[Math.floor(this.rng() * top.length)].s;
+  }
+  spawnEnt(e, first = false) {
+    let s = this.pickSpawn(e);
+    if (e.dummy && e.home) s = { x: e.home[0], z: e.home[1], y: this.groundY(e.home[0], e.home[1]), yaw: 0 };
+    e.x = s.x + (this.rng() - 0.5) * 1.2; e.z = s.z + (this.rng() - 0.5) * 1.2; e.y = s.y + 0.05; e.yaw = s.yaw || this.rng() * 6.28; e.pitch = 0;
+    e.vx = e.vy = e.vz = 0; e.hp = 100; e.shield = this.settings.training ? 100 : 0; e.alive = true; e.fl = 0; e.crouch = false;
+    e.spawnInv = this.T + (this.settings.training ? 0.5 : 2.5);
+    e.owned = [...START_LOADOUT]; e.w = 'viper'; e.cons = { medkit: 1, shieldpot: 0, grenade: 1, smoke: 0 }; e.gadget = null; e.power = {}; e.barrier = 0; e.lastFire = {};
+    if (this.settings.training) { e.cons = { medkit: 4, shieldpot: 4, grenade: 5, smoke: 4 }; }
+    e.hist.length = 0; e.streak = 0; e.lastDmgFrom = null; e.assists = {};
+    if (e.isBot) this.bots.onSpawn(e);
+    this.emit({ k: 'spawn', id: e.id, x: r2(e.x), y: r2(e.y), z: r2(e.z), yaw: r2(e.yaw), first: first ? 1 : 0 });
+    if (e.member) this.sendInv(e);
+  }
+  killSilently(e) { e.alive = false; }
+
+  sendInv(e) {
+    if (!e.member) return;
+    const now = this.T, pw = {}; for (const [k, v] of Object.entries(e.power)) if (v > now) pw[k] = r2(v - now);
+    this.send(e.member, { k: 'inv', w: e.owned, c: e.cons, g: e.gadget, pw, bar: e.barrierUntil > now ? Math.round(e.barrier) : 0, T: this.T });
+  }
+
+  // =============== Eingaben ===============
+  onState(m, e, s) {
+    if (!e.alive || this.state === 'ended') return;
+    const x = +s.x, y = +s.y, z = +s.z;
+    if (!isFinite(x + y + z)) return;
+    const dt = Math.max(0.02, this.T - e.lastSt); e.lastSt = this.T;
+    const d = Math.hypot(x - e.x, z - e.z);
+    if (this.state === 'playing' && !s.tp && d > Math.max(3, 40 * dt) && e.hist.length) { this.send(m, { k: 'fix', x: r2(e.x), y: r2(e.y), z: r2(e.z) }); return; }
+    if (this.state === 'countdown') return;
+    e.vx = (x - e.x) / dt; e.vz = (z - e.z) / dt; e.vy = (y - e.y) / dt;
+    e.x = clamp(x, -196, 196); e.y = clamp(y, -60, 200); e.z = clamp(z, -196, 196);
+    e.yaw = +s.yaw || 0; e.pitch = clamp(+s.pitch || 0, -1.6, 1.6);
+    let fl = (s.fl | 0) & (FL.CROUCH | FL.SPRINT | FL.AIR | FL.DASH | FL.RELOAD | FL.AIM | FL.SHOOT | FL.GRAPPLE | FL.JET | FL.MELEE | FL.THROW);
+    e.crouch = !!(fl & FL.CROUCH); e.clientFl = fl;
+    if (WEAPONS[s.w] && e.owned.includes(s.w)) e.w = s.w;
+    if (e.y < -40) this.damage(e, 9999, e, { w: 'fall' });
+  }
+
+  entHeight(e) { return e.crouch ? H_CROUCH : H_STAND; }
+  isEnemy(a, b) { return a !== b && (a.team < 0 || b.team < 0 || a.team !== b.team); }
+  rewindPos(e, ago) {
+    const h = e.hist; if (!h.length || ago <= 0) return { x: e.x, y: e.y, z: e.z, h: this.entHeight(e) };
+    const t = this.T - ago;
+    for (let i = h.length - 1; i > 0; i--) {
+      if (h[i - 1].t <= t) { const a = h[i - 1], b = h[i], u = clamp((t - a.t) / Math.max(1e-4, b.t - a.t), 0, 1); return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), z: lerp(a.z, b.z, u), h: b.h }; }
+    }
+    const a = h[0]; return { x: a.x, y: a.y, z: a.z, h: a.h };
+  }
+
+  onFire(m, e, msg) { this.fire(e, msg.w, msg.o, msg.d, msg.s | 0, +msg.sp || 1, m.rtt); }
+  fire(e, wid, o, d, seed, sp, rtt = 0) {
+    if (!e.alive || this.state !== 'playing') return;
+    const def = WEAPONS[wid]; if (!def || !e.owned.includes(wid)) return;
+    const last = e.lastFire[wid] ?? -9; if (this.T - last < (1 / def.rate) * 0.72) return;
+    e.lastFire[wid] = this.T; e.w = wid; e.lastShot = this.T;
+    if (!Array.isArray(o) || !Array.isArray(d)) return;
+    let ox = +o[0], oy = +o[1], oz = +o[2]; const eye = e.y + (e.crouch ? 1.15 : 1.6);
+    if (!isFinite(ox + oy + oz) || Math.hypot(ox - e.x, oy - eye, oz - e.z) > 3.5) { ox = e.x; oy = eye; oz = e.z; }
+    let dx = +d[0], dy = +d[1], dz = +d[2]; const dl = Math.hypot(dx, dy, dz); if (!dl || !isFinite(dl)) return; dx /= dl; dy /= dl; dz /= dl;
+    sp = clamp(sp, 0.2, 3);
+    if (def.kind === 'melee') return this.melee(e, def, ox, oy, oz, dx, dy, dz);
+    if (def.kind === 'proj') return this.spawnProj(e, wid, def, ox, oy, oz, dx, dy, dz, seed, sp);
+    this.hitscan(e, wid, def, ox, oy, oz, dx, dy, dz, seed, sp, e.isBot ? 0 : clamp(rtt + 0.1, 0.05, 0.4));
+  }
+
+  targetsFor(att, ago) {
+    const out = [];
+    for (const t of this.ents.values()) {
+      if (t === att || !t.alive || !this.isEnemy(att, t)) continue;
+      if (t.spawnInv > this.T && !this.settings.training) continue;
+      const p = t.isBot ? { x: t.x, y: t.y, z: t.z, h: this.entHeight(t) } : this.rewindPos(t, ago);
+      out.push({ e: t, x: p.x, y: p.y, z: p.z, h: p.h });
+    }
+    for (const dr of this.drones) if (dr.alive && (att.team < 0 ? dr.owner !== att : dr.team !== att.team) && dr.owner !== att) out.push({ e: dr, x: dr.x, y: dr.y - 0.3, z: dr.z, h: 0.7, drone: true });
+    return out;
+  }
+
+  hitscan(att, wid, def, ox, oy, oz, dx, dy, dz, seed, sp, ago) {
+    const n = def.pellets || 1;
+    const dirs = spreadDirs([dx, dy, dz], def.spread * sp, n, seed);
+    const targets = this.targetsFor(att, ago);
+    const acc = new Map(); const ends = [];
+    const w = this.world;
+    for (const dir of dirs) {
+      let tw = w.raycast(ox, oy, oz, dir[0], dir[1], dir[2], def.range);
+      let nx = 0, ny = 1, nz = 0, kind = 0;
+      if (tw < 0) tw = def.range; else { kind = 1; nx = w.rh.nx; ny = w.rh.ny; nz = w.rh.nz; }
+      let bestT = tw, bestTg = null;
+      for (const tg of targets) {
+        const t = rayCylinder(ox, oy, oz, dir[0], dir[1], dir[2], tg.x, tg.z, R_BODY, tg.y, tg.y + tg.h);
+        if (t >= 0 && t < bestT) { bestT = t; bestTg = tg; }
+      }
+      const px = ox + dir[0] * bestT, py = oy + dir[1] * bestT, pz = oz + dir[2] * bestT;
+      if (bestTg) {
+        kind = 2; nx = -dir[0]; ny = -dir[1]; nz = -dir[2];
+        const head = py > bestTg.y + bestTg.h * 0.78;
+        let dmg = def.dmg * (head ? def.hs : 1);
+        const f = bestT / def.range;
+        dmg *= def.cls === 'shotgun' ? clamp(1.35 - f * 1.5, 0.25, 1) : (1 - 0.3 * clamp((f - 0.5) * 2, 0, 1));
+        if (att.isBot) dmg *= (DIFFS[att.diff] || DIFFS.normal).dmg;
+        let a = acc.get(bestTg.e); if (!a) acc.set(bestTg.e, a = { dmg: 0, hs: false, x: px, y: py, z: pz });
+        a.dmg += dmg; a.hs = a.hs || head; a.x = px; a.y = py; a.z = pz;
+      }
+      ends.push([r2(px), r2(py), r2(pz), kind, r2(nx), r2(ny), r2(nz)]);
+    }
+    for (const [t, a] of acc) {
+      if (t.drone) { this.hurtDrone(t, a.dmg, att); continue; }
+      const info = { w: wid, hs: a.hs, x: a.x, y: a.y, z: a.z, dist: Math.hypot(a.x - ox, a.z - oz) };
+      if (def.kind === 'beam') { att.beamAcc[t.id] = (att.beamAcc[t.id] || 0) + a.dmg; att.beamInfo = info; this.damage(t, a.dmg, att, { ...info, silent: true }); }
+      else this.damage(t, a.dmg, att, info);
+    }
+    this.emit({ k: 'shot', id: att.id, w: wid, o: [r2(ox), r2(oy), r2(oz)], e: ends.slice(0, 12) });
+  }
+
+  melee(att, def, ox, oy, oz, dx, dy, dz) {
+    let best = null, bd = def.range + 0.5;
+    for (const t of this.ents.values()) {
+      if (t === att || !t.alive || !this.isEnemy(att, t) || t.spawnInv > this.T) continue;
+      const cx = t.x - att.x, cz = t.z - att.z, cy = t.y + 1 - oy, dist = Math.hypot(cx, cz, cy);
+      if (dist > def.range + 0.5 || Math.abs(cy) > 1.6) continue;
+      const dot = (cx * dx + cy * dy + cz * dz) / dist;
+      if (dot < 0.45) continue;
+      if (dist < bd) { bd = dist; best = t; }
+    }
+    this.emit({ k: 'swing', id: att.id });
+    if (best) this.damage(best, def.dmg * (att.isBot ? (DIFFS[att.diff] || DIFFS.normal).dmg : 1), att, { w: 'blade', x: best.x, y: best.y + 1.2, z: best.z, dist: bd });
+  }
+
+  // =============== Projektile ===============
+  spawnProj(att, wid, def, ox, oy, oz, dx, dy, dz, seed, sp) {
+    const pr = def.proj, d = spreadDirs([dx, dy, dz], def.spread * sp, 1, seed)[0];
+    const p = { id: 'j' + (this.nextId++), type: pr.type, x: ox, y: oy, z: oz, vx: d[0] * pr.speed, vy: d[1] * pr.speed, vz: d[2] * pr.speed, grav: pr.grav || 0, owner: att, w: wid, dmg: def.dmg, splash: pr.splash, life: pr.life, t: 0, bounce: 0 };
+    this.projs.push(p);
+    this.emit({ k: 'proj', id: p.id, t: p.type, o: [r2(ox), r2(oy), r2(oz)], v: [r2(p.vx), r2(p.vy), r2(p.vz)], own: att.id, g: p.grav, w: wid });
+  }
+  onThrow(m, e, msg) { this.throwItem(e, msg.t, msg.o, msg.d); }
+  throwItem(e, kind, o, d) {
+    if (!e.alive || this.state !== 'playing') return;
+    const th = THROWABLES[kind]; if (!th || (e.cons[kind] | 0) <= 0) return;
+    if (this.T - (e.lastThrow || -9) < 0.5) return; e.lastThrow = this.T;
+    e.cons[kind]--; if (this.settings.training) e.cons[kind] = Math.max(e.cons[kind], 3);
+    let ox = +o[0], oy = +o[1], oz = +o[2]; if (!isFinite(ox + oy + oz) || Math.hypot(ox - e.x, oz - e.z) > 3.5) { ox = e.x; oy = e.y + 1.6; oz = e.z; }
+    let dx = +d[0], dy = +d[1], dz = +d[2]; const l = Math.hypot(dx, dy, dz) || 1; dx /= l; dy /= l; dz /= l;
+    const p = { id: 'j' + (this.nextId++), type: kind, x: ox, y: oy, z: oz, vx: dx * th.speed, vy: dy * th.speed + 3.5, vz: dz * th.speed, grav: 22, owner: e, w: kind, dmg: th.dmg, splash: th.splash, life: th.fuse, t: 0, bounce: th.bounce, rest: false };
+    this.projs.push(p);
+    this.emit({ k: 'proj', id: p.id, t: kind, o: [r2(ox), r2(oy), r2(oz)], v: [r2(p.vx), r2(p.vy), r2(p.vz)], own: e.id, g: p.grav, w: kind, fuse: th.fuse });
+    this.sendInv(e);
+  }
+  stepProjs(dt) {
+    const w = this.world;
+    for (let i = this.projs.length - 1; i >= 0; i--) {
+      const p = this.projs[i]; p.t += dt;
+      const grenadey = p.type === 'grenade' || p.type === 'smoke';
+      if (grenadey && p.t >= p.life) { this.detonate(p, p.x, p.y, p.z, null); this.projs.splice(i, 1); continue; }
+      if (!grenadey && p.t >= p.life) { this.detonate(p, p.x, p.y, p.z, null); this.projs.splice(i, 1); continue; }
+      if (p.rest) continue;
+      p.vy -= p.grav * dt;
+      const ox = p.x, oy = p.y, oz = p.z, mx = p.vx * dt, my = p.vy * dt, mz = p.vz * dt, len = Math.hypot(mx, my, mz) || 1e-6;
+      const ddx = mx / len, ddy = my / len, ddz = mz / len;
+      let tw = w.raycast(ox, oy, oz, ddx, ddy, ddz, len + (grenadey ? 0.12 : 0));
+      let tHit = tw >= 0 ? tw : len + 1, nrm = tw >= 0 ? [w.rh.nx, w.rh.ny, w.rh.nz] : null, hitEnt = null;
+      if (!grenadey) {
+        for (const t of this.ents.values()) {
+          if (!t.alive || (t === p.owner && p.t < 0.15) || !this.isEnemy(p.owner, t) && t !== p.owner) continue;
+          if (t === p.owner) continue;
+          const tt = rayCylinder(ox, oy, oz, ddx, ddy, ddz, t.x, t.z, R_BODY + 0.1, t.y, t.y + this.entHeight(t));
+          if (tt >= 0 && tt < tHit && tt <= len) { tHit = tt; hitEnt = t; nrm = null; }
+        }
+      }
+      if (tHit <= len + (grenadey ? 0.12 : 0) && (hitEnt || nrm)) {
+        if (grenadey) {
+          p.x = ox + ddx * Math.max(0, tHit - 0.05); p.y = oy + ddy * Math.max(0, tHit - 0.05); p.z = oz + ddz * Math.max(0, tHit - 0.05);
+          const vn = p.vx * nrm[0] + p.vy * nrm[1] + p.vz * nrm[2];
+          p.vx = (p.vx - 2 * vn * nrm[0]) * p.bounce; p.vy = (p.vy - 2 * vn * nrm[1]) * p.bounce; p.vz = (p.vz - 2 * vn * nrm[2]) * p.bounce;
+          if (nrm[1] > 0.6 && Math.hypot(p.vx, p.vy, p.vz) < 2.4) { p.rest = true; p.vx = p.vy = p.vz = 0; this.emit({ k: 'prest', id: p.id, p: [r2(p.x), r2(p.y), r2(p.z)] }); }
+          else this.emit({ k: 'pbounce', id: p.id, p: [r2(p.x), r2(p.y), r2(p.z)], v: [r2(p.vx), r2(p.vy), r2(p.vz)] });
+        } else {
+          const hx = ox + ddx * tHit, hy = oy + ddy * tHit, hz = oz + ddz * tHit;
+          this.detonate(p, hx - (nrm ? ddx * 0.2 : 0), hy - (nrm ? ddy * 0.2 : 0), hz - (nrm ? ddz * 0.2 : 0), hitEnt);
+          this.projs.splice(i, 1);
+        }
+        continue;
+      }
+      p.x += mx; p.y += my; p.z += mz;
+      if (p.y < -40) this.projs.splice(i, 1);
+    }
+  }
+  detonate(p, x, y, z, directEnt) {
+    const kind = p.type;
+    if (kind === 'smoke') {
+      const th = THROWABLES.smoke; this.smokes.push({ x, y, z, r: th.smokeRadius, until: this.T + th.smokeTime });
+      this.emit({ k: 'smoke', p: [r2(x), r2(y), r2(z)], r: th.smokeRadius, t: th.smokeTime, id: p.id }); return;
+    }
+    const r = kind === 'plasma' ? 2.0 : p.splash;
+    const dmgCenter = kind === 'plasma' ? p.dmg * 0.55 : p.dmg;
+    this.emit({ k: 'boom', id: p.id, p: [r2(x), r2(y), r2(z)], r, t: kind });
+    if (directEnt && kind === 'plasma') this.damage(directEnt, p.dmg, p.owner, { w: p.w, x, y, z, dist: 0 });
+    for (const t of this.ents.values()) {
+      if (!t.alive || (t === directEnt && kind === 'plasma')) continue;
+      const own = t === p.owner;
+      if (!own && !this.isEnemy(p.owner, t)) continue;
+      const cx = t.x, cy = t.y + 0.95, cz = t.z, d = Math.hypot(cx - x, cy - y, cz - z);
+      if (d > r + 0.4) continue;
+      if (!this.world.los(x, y + 0.2, z, cx, cy, cz) && d > 1.2) continue;
+      const f = clamp(1 - d / (r + 0.4), 0.12, 1);
+      let dmg = dmgCenter * f * (own ? 0.5 : 1) * (directEnt === t && kind === 'rocket' ? 1.0 : 1);
+      if (p.owner.isBot) dmg *= (DIFFS[p.owner.diff] || DIFFS.normal).dmg;
+      const kb = kind === 'plasma' ? 0 : (own ? 15 : 11) * f;
+      const dirx = (cx - x) / (d || 1), diry = (cy - y) / (d || 1) + 0.35, dirz = (cz - z) / (d || 1);
+      this.damage(t, dmg, p.owner, { w: p.w, x: cx, y: cy, z: cz, dist: Math.hypot(p.owner.x - x, p.owner.z - z), expl: true, kb: kb ? [r2(dirx * kb), r2(diry * kb), r2(dirz * kb)] : null });
+    }
+    for (const dr of this.drones) if (dr.alive && Math.hypot(dr.x - x, dr.y - y, dr.z - z) < r && (dr.owner !== p.owner && (p.owner.team < 0 || dr.team !== p.owner.team))) this.hurtDrone(dr, dmgCenter, p.owner);
+  }
+
+  // =============== Schaden ===============
+  damage(v, amt, att, info = {}) {
+    if (!v.alive || this.state === 'ended' || this.state === 'countdown') return 0;
+    if (v.spawnInv > this.T && info.w !== 'fall' && !this.settings.training) return 0;
+    if (v.dcInvuln && info.w !== 'fall') return 0;
+    if (v.dummy && info.w === 'fall') return 0;
+    amt = Math.max(0, amt); let rem = amt;
+    if (v.barrierUntil > this.T && v.barrier > 0) { const ab = Math.min(v.barrier, rem); v.barrier -= ab; rem -= ab; if (v.barrier <= 0) { v.barrierUntil = 0; this.sendInv(v); } }
+    const sd = Math.min(v.shield, rem); v.shield -= sd; rem -= sd; v.hp -= rem;
+    if (att && att !== v) { att.dmgDealt += amt; v.lastDmgFrom = att.id; v.assists[att.id] = this.T; }
+    const dead = v.hp <= 0;
+    if (!info.silent || dead) this.emit({ k: 'hit', v: v.id, a: att ? att.id : null, d: Math.round(amt), hs: info.hs ? 1 : 0, p: [r2(info.x ?? v.x), r2(info.y ?? v.y + 1.2), r2(info.z ?? v.z)], kb: info.kb || null, sh: sd > 0 && rem <= 0 ? 1 : 0, w: info.w });
+    if (v.isBot && att && !dead) this.bots.onHurt(v, att);
+    if (dead) this.kill(v, att, info);
+    return amt;
+  }
+  kill(v, att, info) {
+    v.alive = false; v.hp = 0; v.deaths++; v.fl = FL.DEAD; v.streak0 = v.streak; v.streak = 0;
+    const self = !att || att === v;
+    const S = this.settings;
+    if (!self && !S.training) {
+      att.kills++; att.score++; att.streak++; att.best = Math.max(att.best, att.streak); if (info.hs) att.hs++;
+      if (att.member) this.sendInv(att);
+    }
+    if (v.dummy) { v.respawnAt = this.T + 2.2; }
+    else v.respawnAt = this.T + (S.training ? 1.2 : 3.8);
+    if (self && !S.training && att && info.w !== 'fall') att.score = Math.max(0, att.score - 0); // Selbstmord: kein Punkt
+    this.emit({ k: 'kill', v: v.id, a: self ? null : att.id, w: info.w, hs: info.hs ? 1 : 0, dist: Math.round(info.dist || 0), streak: self ? 0 : att.streak, vs: v.streak0, ex: info.expl ? 1 : 0 });
+    // Loot
+    if (!v.dummy && !S.training) {
+      const drop = [...v.owned].reverse().find(w => w !== 'viper' && w !== 'blade');
+      if (drop) this.addDyn('weapon', drop, v.x, v.y + 0.3, v.z, 70);
+      if (this.rng() < 0.6) this.addDyn('cons', this.rng() < 0.5 ? 'medkit' : 'shieldpot', v.x + 0.6, v.y + 0.3, v.z + 0.4, 50);
+    }
+    if (v.cons.grenade > 0 && !S.training && this.rng() < 0.4) this.addDyn('cons', 'grenade', v.x - 0.6, v.y + 0.3, v.z - 0.4, 50);
+    if (v.isBot) this.bots.onDeath(v);
+    if (S.training && !self) { /* keine Wertung */ }
+    this.checkEnd();
+  }
+
+  scores() {
+    const mode = MODES[this.settings.mode];
+    if (mode.teams) { const t = new Array(mode.teams).fill(0); for (const e of this.ents.values()) if (e.team >= 0) t[e.team] += e.kills; return { t }; }
+    return { t: null };
+  }
+  checkEnd() {
+    if (this.state !== 'playing' || this.settings.training) return;
+    const mode = MODES[this.settings.mode], lim = this.scoreLimit;
+    if (mode.teams) { const t = this.scores().t; if (t.some(v => v >= lim)) this.endMatch(); }
+    else { for (const e of this.ents.values()) if (e.kills >= lim) { this.endMatch(); break; } }
+  }
+  endMatch() {
+    if (this.state === 'ended') return;
+    this.state = 'ended'; this.endAt = this.T;
+    const mode = MODES[this.settings.mode];
+    const ents = [...this.ents.values()].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    let winnerTeam = -1, winnerId = null;
+    if (mode.teams) { const t = this.scores().t; const mx = Math.max(...t); const lead = t.filter(v => v === mx).length === 1 ? t.indexOf(mx) : -1; winnerTeam = lead; }
+    else if (ents.length) winnerId = ents[0].id;
+    const board = ents.map(e => ({ id: e.id, name: e.name, team: e.team, bot: e.isBot ? 1 : 0, k: e.kills, d: e.deaths, hs: e.hs, dmg: Math.round(e.dmgDealt), best: e.best, chests: e.chests, shards: e.shardSet.size }));
+    this.emit({ k: 'end', winTeam: winnerTeam, winId: winnerId, board });
+    this.flush(true);
+  }
+
+  // =============== Pickups ===============
+  addDyn(kind, item, x, y, z, ttl = 60, n = 0) {
+    const d = { id: 'd' + (this.nextId++), kind, item, x, y, z, ttl: this.T + ttl, n, dyn: true, on: true };
+    this.dyn.push(d); this.emit({ k: 'drop', p: this.dynInfo(d) }); return d;
+  }
+  dynInfo(d) { return { id: d.id, kind: d.kind, item: d.item, x: r2(d.x), y: r2(d.y), z: r2(d.z) }; }
+  tryPickup(e, p) {
+    const m = e.member;
+    switch (p.kind) {
+      case 'weapon': {
+        const def = WEAPONS[p.item]; if (!def) return false;
+        if (e.owned.includes(p.item)) { if (!m || !def.ammo) return false; this.send(m, { k: 'give', kind: 'ammo', item: def.ammo, n: Math.round((AMMO_GIVE[def.ammo] || 30) * 0.6) }); return true; }
+        if (e.owned.length >= 5) {
+          const idx = e.owned.indexOf(e.w) > 1 ? e.owned.indexOf(e.w) : e.owned.length - 1;
+          const old = e.owned[idx]; if (old === 'blade' || old === 'viper') return false;
+          e.owned[idx] = p.item; if (e.isBot === false) this.addDyn('weapon', old, e.x, e.y + 0.3, e.z, 40);
+        } else e.owned.push(p.item);
+        if (m) { this.send(m, { k: 'give', kind: 'weapon', item: p.item, n: AMMO_GIVE[def.ammo] ?? 0 }); }
+        if (e.isBot) this.bots.onWeapon(e, p.item);
+        this.sendInv(e); return true;
+      }
+      case 'ammo': if (m) this.send(m, { k: 'give', kind: 'ammo', item: p.item, n: AMMO_GIVE[p.item] || 30 }); return !!m || e.isBot;
+      case 'cons': { const c = CONSUMABLES[p.item]; if (!c || (e.cons[p.item] | 0) >= c.max) return false; e.cons[p.item] = (e.cons[p.item] | 0) + 1; this.sendInv(e); return true; }
+      case 'power': {
+        const pw = POWERUPS[p.item]; if (!pw) return false;
+        if (p.item === 'barrier') { e.barrier = pw.absorb; e.barrierUntil = this.T + pw.dur; } else e.power[p.item] = this.T + pw.dur;
+        this.sendInv(e); this.emit({ k: 'powerfx', id: e.id, t: p.item }); return true;
+      }
+      case 'gadget': if (!GADGETS[p.item] || e.gadget === p.item) return false; e.gadget = p.item; this.sendInv(e); return true;
+      case 'shard': if (!m || e.shardSet.has(p.id)) return false; e.shardSet.add(p.id); this.send(m, { k: 'shard', id: p.id, n: e.shardSet.size }); return 'private';
+    }
+    return false;
+  }
+  stepPickups() {
+    const T = this.T;
+    for (const p of this.pickups) if (!p.on && p.next && T >= p.next && p.kind !== 'shard') { p.on = true; this.emit({ k: 'pickr', id: p.id }); }
+    for (let i = this.dyn.length - 1; i >= 0; i--) if (T > this.dyn[i].ttl) { this.emit({ k: 'pick', id: this.dyn[i].id, by: null }); this.dyn.splice(i, 1); }
+    for (const e of this.ents.values()) {
+      if (!e.alive || e.dummy) continue;
+      for (const p of this.pickups) {
+        if (p.kind !== 'shard' && !p.on) continue;
+        if (Math.abs(p.x - e.x) > 1.7 || Math.abs(p.z - e.z) > 1.7 || Math.abs(p.y - e.y) > 2.4) continue;
+        if (p.kind === 'shard' && e.isBot) continue;
+        const r = this.tryPickup(e, p);
+        if (!r) continue;
+        if (r === 'private') { if (e.member) this.send(e.member, { k: 'pick', id: p.id, by: e.id, me: 1 }); continue; }
+        p.on = false; p.next = T + (p.respawn || 30);
+        this.emit({ k: 'pick', id: p.id, by: e.id });
+      }
+      for (let i = this.dyn.length - 1; i >= 0; i--) {
+        const d = this.dyn[i];
+        if (Math.abs(d.x - e.x) > 1.7 || Math.abs(d.z - e.z) > 1.7 || Math.abs(d.y - e.y) > 2.6) continue;
+        if (this.tryPickup(e, d)) { this.emit({ k: 'pick', id: d.id, by: e.id }); this.dyn.splice(i, 1); }
+      }
+    }
+  }
+
+  // =============== Interaktionen ===============
+  setDoor(d, open) { d.open = open; if (d.col) d.col.on = !open; }
+  onInteract(m, e, msg) {
+    if (!e.alive) return;
+    if (msg.t === 'chest') {
+      const c = this.map.chests.find(c => c.id === msg.id), st = this.chestState.get(msg.id); if (!c || !st || st.open) return;
+      if (Math.hypot(c.x - e.x, c.z - e.z) > 4 || Math.abs(c.y - e.y) > 3) return;
+      st.open = true; st.until = this.T + 150; e.chests++;
+      this.emit({ k: 'iact', t: 'chest', id: c.id, st: 1, by: e.id });
+      const tier = c.tier, loot = [];
+      const pick = (arr) => arr[Math.floor(this.rng() * arr.length) % arr.length];
+      const n = tier === 1 ? 2 : tier === 2 ? 3 : 4;
+      for (let i = 0; i < n; i++) loot.push(tier === 3 && i < 2 ? pick(LOOT.t3) : tier === 2 && i === 0 ? pick(LOOT.t2) : pick(i === 0 ? LOOT['t' + tier] : LOOT.t1));
+      loot.push(['ammo', pick(['light', 'energy', 'sniper', 'shells'])]);
+      loot.forEach(([kind, item], i) => { const a = (i / loot.length) * 6.28 + c.ry; this.addDyn(kind, item, c.x + Math.cos(a) * 1.5, c.y + 0.4, c.z + Math.sin(a) * 1.5, 90); });
+      if (m) this.send(m, { k: 'chestopen', id: c.id, tier });
+    } else if (msg.t === 'switch') {
+      const s = this.map.switches.find(s => s.id === msg.id), st = this.switchState.get(msg.id); if (!s || !st) return;
+      if (Math.hypot(s.x - e.x, s.z - e.z) > 3.5 || Math.abs(s.y - e.y) > 3) return;
+      if (s.once && st.on) return;
+      st.on = !st.on;
+      this.emit({ k: 'iact', t: 'switch', id: s.id, st: st.on ? 1 : 0, by: e.id });
+      for (const did of s.targets) { const d = this.doorsById.get(did); if (d) { d.locked = false; this.setDoor(d, st.on); this.emit({ k: 'iact', t: 'door', id: d.id, st: d.open ? 1 : 0, lk: 0 }); } }
+      if (s.event === 'lowgrav') { this.lowgravUntil = this.T + 25; this.emit({ k: 'lowgrav', until: this.lowgravUntil, by: e.id }); st.on = false; }
+      if (s.event === 'power') { if (m) this.send(m, { k: 'achv', id: 'vault' }); this.emit({ k: 'toast', text: e.name + ' hat den Strom eingeschaltet – der Tresor öffnet sich!' }); }
+    } else if (msg.t === 'door') {
+      const d = this.doorsById.get(msg.id); if (!d || d.locked) return;
+      if (Math.hypot(d.x - e.x, d.z - e.z) > 6) return;
+      this.setDoor(d, !d.open); this.emit({ k: 'iact', t: 'door', id: d.id, st: d.open ? 1 : 0 });
+    } else if (msg.t === 'duck') {
+      const sp = this.map.secrets.find(s => s.id === 'duck'); if (!sp || e.duck || Math.hypot(sp.x - e.x, sp.z - e.z) > 3 || Math.abs(sp.y - e.y) > 3) return;
+      e.duck = true; if (m) this.send(m, { k: 'achv', id: 'duck' });
+    }
+  }
+  onUse(m, e, msg) {
+    if (!e.alive || this.state !== 'playing' || this.T - e.lastUse < 0.8) return;
+    if (msg.t === 'medkit' && e.cons.medkit > 0 && e.hp < 100) { e.cons.medkit--; e.hp = Math.min(100, e.hp + CONSUMABLES.medkit.heal); e.lastUse = this.T; this.emit({ k: 'usefx', id: e.id, t: 'medkit' }); this.sendInv(e); if (this.settings.training) e.cons.medkit = 4; }
+    else if (msg.t === 'shieldpot' && e.cons.shieldpot > 0 && e.shield < 100) { e.cons.shieldpot--; e.shield = Math.min(100, e.shield + CONSUMABLES.shieldpot.shield); e.lastUse = this.T; this.emit({ k: 'usefx', id: e.id, t: 'shieldpot' }); this.sendInv(e); if (this.settings.training) e.cons.shieldpot = 4; }
+  }
+  onGadget(m, e, msg) {
+    if (!e.alive || this.state !== 'playing' || !e.gadget) return;
+    const g = GADGETS[e.gadget], now = this.T;
+    if ((e.gadCd[e.gadget] || 0) > now && msg.t !== 'teleback') return;
+    if (e.gadget === 'grapple' && msg.t === 'hook') { e.gadCd.grapple = now + g.cd; this.emit({ k: 'gad', id: e.id, t: 'grapple', p: [r2(+msg.p[0]), r2(+msg.p[1]), r2(+msg.p[2])] }); }
+    else if (e.gadget === 'teleporter' && (msg.t === 'tele' || msg.t === 'teleback')) { if (msg.t === 'teleback') e.gadCd.teleporter = now + g.cd; this.emit({ k: 'gad', id: e.id, t: msg.t, p: [r2(+msg.p[0]), r2(+msg.p[1]), r2(+msg.p[2])] }); }
+    else if (e.gadget === 'scanner' && msg.t === 'scan') {
+      e.gadCd.scanner = now + g.cd;
+      const list = []; for (const t of this.ents.values()) if (t !== e && t.alive && this.isEnemy(e, t) && Math.hypot(t.x - e.x, t.z - e.z) < 48) list.push(t.id);
+      this.emit({ k: 'gad', id: e.id, t: 'scan', p: [r2(e.x), r2(e.y), r2(e.z)] });
+      if (m) this.send(m, { k: 'scan', ids: list, dur: 5 });
+    } else if (e.gadget === 'drone' && msg.t === 'drone') {
+      e.gadCd.drone = now + g.cd;
+      this.drones = this.drones.filter(d => d.owner !== e);
+      const dr = { id: 'x' + (this.nextId++), owner: e, team: e.team, x: e.x, y: e.y + 2.5, z: e.z, hp: 45, alive: true, until: now + 20, fireAt: 0 };
+      this.drones.push(dr); this.emit({ k: 'drone', id: dr.id, own: e.id });
+    } else if (e.gadget === 'jetpack' || e.gadget === 'grapple') { /* clientseitig */ }
+  }
+  hurtDrone(dr, dmg, att) { dr.hp -= dmg; if (dr.hp <= 0 && dr.alive) { dr.alive = false; this.emit({ k: 'droneboom', id: dr.id, p: [r2(dr.x), r2(dr.y), r2(dr.z)] }); } }
+  stepDrones(dt) {
+    for (let i = this.drones.length - 1; i >= 0; i--) {
+      const d = this.drones[i];
+      if (!d.alive || this.T > d.until || !d.owner.alive) { if (d.alive) this.emit({ k: 'droneboom', id: d.id, p: [r2(d.x), r2(d.y), r2(d.z)] }); this.drones.splice(i, 1); continue; }
+      const o = d.owner, a = this.T * 0.8, tx = o.x + Math.cos(a) * 2.2, ty = o.y + 2.6 + Math.sin(this.T * 2) * 0.2, tz = o.z + Math.sin(a) * 2.2;
+      d.x += (tx - d.x) * Math.min(1, dt * 3); d.y += (ty - d.y) * Math.min(1, dt * 3); d.z += (tz - d.z) * Math.min(1, dt * 3);
+      if (this.T >= d.fireAt) {
+        let best = null, bd = 24;
+        for (const t of this.ents.values()) { if (!t.alive || !this.isEnemy(o, t) || t.spawnInv > this.T) continue; const dist = Math.hypot(t.x - d.x, t.y + 1 - d.y, t.z - d.z); if (dist < bd && this.world.los(d.x, d.y, d.z, t.x, t.y + 1.2, t.z)) { bd = dist; best = t; } }
+        if (best) {
+          d.fireAt = this.T + 0.38; d.target = best.id;
+          const dir = [best.x - d.x, best.y + 1.1 - d.y, best.z - d.z]; const l = Math.hypot(...dir); const dn = dir.map(v => v / l + (this.rng() - 0.5) * 0.05);
+          this.emit({ k: 'shot', id: d.id, w: 'drone', o: [r2(d.x), r2(d.y), r2(d.z)], e: [[r2(best.x), r2(best.y + 1.1), r2(best.z), 2, 0, 1, 0]] });
+          if (this.rng() < 0.8) this.damage(best, 7, o, { w: 'drone', x: best.x, y: best.y + 1.1, z: best.z, dist: bd });
+        }
+      }
+    }
+  }
+
+  // =============== Tick ===============
+  tick() {
+    const now = Date.now(); let dt = (now - this.last) / 1000; this.last = now; dt = Math.min(dt, 0.1);
+    if (this.state === 'lobby') { this.lobbyHousekeeping(); return; }
+    this.T += dt; this.tickN++;
+    const T = this.T;
+    // Disconnect-Cleanup
+    for (const m of [...this.members.values()]) if (!m.connected && m.dcAt && T - m.dcAt > 45) this.removeMember(m, true);
+    if (this.state === 'countdown' && T >= this.startAt) { this.state = 'playing'; this.matchStart = T; this.emit({ k: 'go' }); }
+    // Movers
+    for (const mv of this.map.movers) { const y = moverY(mv, T); mv.col.y0 = y; mv.col.y1 = y + mv.th; }
+    // Türen (automatisch)
+    for (const d of this.map.doors) {
+      if (!d.auto || d.locked) continue;
+      let near = false;
+      for (const e of this.ents.values()) if (e.alive && Math.abs(e.x - d.x) < d.w / 2 + 4 && Math.abs(e.z - d.z) < d.d / 2 + 4 && Math.abs(e.y - d.y) < 4) { near = true; break; }
+      if (near) d.closeAt = T + 2.2;
+      if (near && !d.open) { this.setDoor(d, true); this.emit({ k: 'iact', t: 'door', id: d.id, st: 1 }); }
+      else if (!near && d.open && T > (d.closeAt || 0)) { this.setDoor(d, false); this.emit({ k: 'iact', t: 'door', id: d.id, st: 0 }); }
+    }
+    // Respawns, Power-Ups
+    for (const e of this.ents.values()) {
+      if (!e.alive && e.respawnAt && T >= e.respawnAt && this.state !== 'ended') { e.respawnAt = 0; this.spawnEnt(e); }
+      if (e.alive) {
+        let fl = e.isBot ? e.fl : (e.clientFl || 0);
+        if (e.power.speed > T) fl |= FL.SPD; if (e.power.jump > T) fl |= FL.JMP; if (e.barrierUntil > T) fl |= FL.BAR; if (e.spawnInv > T) fl |= FL.INVULN;
+        e.fl = fl;
+        { let ch = false; for (const k of Object.keys(e.power)) if (e.power[k] < T) { delete e.power[k]; ch = true; } if (ch) this.sendInv(e); }
+        if (e.barrierUntil && e.barrierUntil < T) { e.barrierUntil = 0; e.barrier = 0; this.sendInv(e); }
+      } else e.fl = FL.DEAD;
+      // Laser-Aggregation
+      if (this.T - e.beamT > 0.22) { e.beamT = this.T; for (const [vid, sum] of Object.entries(e.beamAcc)) { const v = this.ents.get(vid); if (v && sum > 0) this.emit({ k: 'hit', v: vid, a: e.id, d: Math.round(sum), hs: 0, p: [r2(v.x), r2(v.y + 1.2), r2(v.z)], kb: null, sh: 0, w: 'lancer', agg: 1 }); } e.beamAcc = {}; }
+    }
+    if (this.state === 'playing') this.bots.update(dt);
+    if (this.state === 'playing') { this.stepProjs(dt); this.stepDrones(dt); }
+    this.smokes = this.smokes.filter(s => s.until > T);
+    if (this.tickN % 4 === 0) this.stepPickups();
+    // Chests respawn
+    for (const [id, c] of this.chestState) if (c.open && T > c.until && this.state === 'playing') { c.open = false; this.emit({ k: 'iact', t: 'chest', id, st: 0 }); }
+    // Verlauf für Lag-Compensation
+    for (const e of this.ents.values()) { if (!e.alive) continue; e.hist.push({ t: T, x: e.x, y: e.y, z: e.z, h: this.entHeight(e) }); if (e.hist.length > 24) e.hist.shift(); }
+    // Supply Drops
+    if (this.state === 'playing' && !this.settings.training && T >= this.nextSupply) { this.nextSupply = T + 85; this.supplyDrop(); }
+    for (let i = this.supplies.length - 1; i >= 0; i--) { const s = this.supplies[i]; if (T >= s.land) { this.supplyLand(s); this.supplies.splice(i, 1); } }
+    // Uhr / Matchende
+    if (this.state === 'playing' && !this.settings.training) {
+      const left = this.timeLimit - (T - this.matchStart);
+      if (T - this.lastClock >= 1) { this.lastClock = T; this.emit({ k: 'clock', left: Math.max(0, Math.ceil(left)), sc: this.scores().t, ents: [...this.ents.values()].map(e => [e.id, e.kills, e.deaths, e.team]) }); }
+      if (left <= 0) this.endMatch();
+    } else if (this.state === 'playing' && T - this.lastClock >= 1) { this.lastClock = T; this.emit({ k: 'clock', left: 0, sc: null, ents: [...this.ents.values()].map(e => [e.id, e.kills, e.deaths, e.team]) }); }
+    if (this.state === 'ended' && T - this.endAt > 14) { this.toLobby(); return; }
+    if (this.tickN % NET.snapEvery === 0) this.flush(false);
+  }
+  lobbyHousekeeping() {
+    for (const m of [...this.members.values()]) if (!m.connected && Date.now() - m.lastSeen > 20000) this.removeMember(m, true);
+  }
+  supplyDrop() {
+    const sp = this.surfaceSpawns[Math.floor(this.rng() * this.surfaceSpawns.length)]; if (!sp) return;
+    const s = { id: 's' + (this.nextId++), x: sp.x, z: sp.z, y: sp.y, land: this.T + 9 };
+    this.supplies.push(s); this.emit({ k: 'supply', id: s.id, x: s.x, y: s.y, z: s.z, fall: 9 });
+  }
+  supplyLand(s) {
+    const picks = [['weapon', this.pickArr(['stormcaller', 'longshot', 'lancer', 'pulse', 'marksman'])], ['power', 'barrier'], ['cons', 'medkit'], ['cons', 'shieldpot'], ['gadget', this.pickArr(['jetpack', 'drone', 'grapple'])], ['ammo', 'energy']];
+    picks.forEach(([k, i], n) => { const a = n * 1.05; this.addDyn(k, i, s.x + Math.cos(a) * 1.8, s.y + 0.4, s.z + Math.sin(a) * 1.8, 100); });
+    this.emit({ k: 'supplyland', id: s.id, x: s.x, y: s.y, z: s.z });
+  }
+  pickArr(a) { return a[Math.floor(this.rng() * a.length)]; }
+
+  flush(force) {
+    if (!this.ev.length && !force && this.state === 'lobby') return;
+    const ents = [];
+    for (const e of this.ents.values()) ents.push([e.id, r2(e.x), r2(e.y), r2(e.z), r2(e.yaw), r2(e.pitch), e.fl | (e.alive ? 0 : FL.DEAD), e.w, Math.ceil(e.hp), Math.ceil(e.shield)]);
+    const drones = this.drones.map(d => [d.id, r2(d.x), r2(d.y), r2(d.z), d.owner.id, d.team]);
+    const snap = { k: 'snap', T: r2(this.T), e: ents, d: drones, ev: this.ev };
+    this.ev = [];
+    const str = JSON.stringify(snap);
+    for (const m of this.members.values()) if (m.connected && m.client) m.client.send(str, true);
+  }
+
+  destroy() { this.members.clear(); this.ents.clear(); }
+}

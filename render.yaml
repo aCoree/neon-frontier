@@ -1,0 +1,12 @@
+# Render.com Blueprint: einfaches Hosting des Multiplayer-Servers (kostenloser Plan möglich).
+services:
+  - type: web
+    name: neon-frontier
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
