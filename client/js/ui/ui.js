@@ -75,6 +75,7 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
+    if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     $('#clickhint').classList.remove('show');
@@ -94,6 +95,7 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
+    if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     if (name === 'solo') this.refreshSolo();
@@ -181,6 +183,38 @@ export class UI {
       if (this.g.roomCode === m.code) return;
       this.toast(m.from + ' nimmt die Party in eine Lobby mit …', 'event'); audio.notify(); this.joinRoom(m.code);
     });
+    Social.listen('mm_status', (m) => this.mmStatus(m));
+    Social.listen('mm_cancelled', (m) => { this.mmHide(); this.toast(m.reason || 'Suche beendet.', m.reason === 'Suche abgebrochen.' ? '' : 'bad'); });
+    Social.listen('mm_found', (m) => this.mmFound(m));
+  }
+  // ---------- Matchmaking ----------
+  openMatchmaking() {
+    const guest = !Account.user; $('#mm-guest').style.display = guest ? '' : 'none'; $('#mm-main').style.display = guest ? 'none' : '';
+    if (guest) return; const p = this._party, size = p ? p.members.length : 1, TEAM = { duel: 1, v2: 2, v3: 3 }, box = $('#mm-modes'); box.replaceChildren();
+    const modes = ['ffa', 'tdm', 'duel', 'v2', 'v3']; if (!modes.includes(this.mmMode)) this.mmMode = Progress.d.settings.mmMode && modes.includes(Progress.d.settings.mmMode) ? Progress.d.settings.mmMode : 'ffa';
+    for (const id of modes) {
+      const md = MODES[id], c = document.createElement('div'), bad = TEAM[id] && size > TEAM[id]; c.className = 'card' + (id === this.mmMode ? ' on' : '') + (bad ? ' locked' : ''); c.dataset.id = id;
+      const b = document.createElement('b'); b.textContent = md.name; const sp = document.createElement('span'); sp.textContent = bad ? 'Zu groß für deine Party (' + size + ')' : md.desc; c.append(b, sp);
+      c.onclick = () => { if (bad) { audio.error(); return; } audio.click(); this.mmMode = id; Progress.d.settings.mmMode = id; Progress.save(); this.openMatchmaking(); }; box.appendChild(c);
+    }
+    const leader = !p || p.isLeader; $('#mm-hint').textContent = p ? (leader ? 'Deine Party (' + size + ' Spieler) sucht gemeinsam.' : 'Nur der Party-Leiter kann die Suche starten.') : '';
+    const st = $('#mm-start'); st.disabled = !leader || !!this._mm || !Social.connected; st.textContent = this._mm ? 'Suche läuft …' : (Social.connected ? 'Suche starten' : 'Verbinde …');
+    st.onclick = async () => { audio.click(); st.disabled = true; const r = await Social.cmd({ k: 'mm_queue', mode: this.mmMode }); if (!r.ok) { this.toast(r.error || 'Suche fehlgeschlagen', 'bad'); audio.error(); st.disabled = false; } else { this.back(); } };
+  }
+  mmStatus(m) {
+    this._mm = m; const bar = $('#mm-bar'); bar.classList.remove('found'); bar.classList.add('show'); const md = MODES[m.mode]?.name || m.mode, p = this._party;
+    $('#mmb-title').textContent = m.stage === 'filling' ? 'Keine weiteren Spieler – Bots füllen auf' : 'Suche Spieler · ' + md;
+    $('#mmb-sub').textContent = m.stage === 'filling' ? md + ' startet gleich' : m.found + ' von ' + m.cap + ' Spielern gefunden' + (p ? ' · Party' : '');
+    const s = m.waited | 0; $('#mmb-time').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    $('#mmb-cancel').style.display = !p || p.isLeader ? '' : 'none'; $('#mmb-cancel').onclick = async () => { audio.back(); const r = await Social.cmd({ k: 'mm_cancel' }); if (!r.ok) this.toast(r.error, 'bad'); };
+    $('#mm-sub').textContent = 'Suche läuft … ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  mmHide() { this._mm = null; $('#mm-bar').classList.remove('show', 'found'); $('#mm-sub').textContent = 'Gegen Spieler online'; if (this.cur === 'mm') this.openMatchmaking(); }
+  mmFound(m) {
+    this._mm = null; const bar = $('#mm-bar'); bar.classList.add('show', 'found'); $('#mmb-title').textContent = 'Match gefunden!'; $('#mmb-sub').textContent = (MODES[m.mode]?.name || m.mode) + ' · ' + m.humans + (m.humans === 1 ? ' Spieler' : ' Spieler') + (m.filled ? ' + Bots' : '');
+    $('#mmb-time').textContent = ''; $('#mmb-cancel').style.display = 'none'; $('#mm-sub').textContent = 'Gegen Spieler online'; audio.levelUp(); setTimeout(() => bar.classList.remove('show', 'found'), 3500);
+    if (this.inMatchNow()) { this.toast('Match gefunden – nach dem laufenden Match bitte beitreten (Code ' + m.code + ')', 'event'); return; }
+    this.joinRoom(m.code);
   }
   // Wird nach jedem Betreten eines Raums aufgerufen: der Party-Leiter holt seine Mitglieder nach
   afterJoined(code) { if (Social.party?.isLeader && code) Social.cmd({ k: 'party_follow', code }); }
@@ -215,7 +249,7 @@ export class UI {
     $('#pp-add').style.display = p.isLeader && p.members.length < p.max ? '' : 'none';
   }
   async refreshLobbyFriends() {
-    const box = $('#lobby-invite'); if (!Account.user || !Social.connected) { box.style.display = 'none'; return; }
+    const box = $('#lobby-invite'); if (!Account.user || !Social.connected || this.lastLobby?.auto) { box.style.display = 'none'; return; }
     let d; try { d = await Account.friends(); } catch { return; }
     const inLobby = new Set([...(this.lastLobby?.members || []).map(m => m.name.toLowerCase()), ...(this._party?.members || []).map(m => m.name.toLowerCase())]), list = $('#lobby-friends'), online = d.friends.filter(f => f.online && !f.inMatch && !inLobby.has(f.username.toLowerCase()));
     box.style.display = ''; $('#lobby-invite-n').textContent = '(' + online.length + ' online)'; list.replaceChildren();
@@ -319,7 +353,7 @@ export class UI {
   async checkFriendRequests() { if (!Account.user) return; try { const d = await Account.friends(); if (d.incoming.length) { this.toast(d.incoming.length + ' neue Freundschaftsanfrage(n)!', 'event'); $('#fr-count').textContent = d.incoming.length + ' neue Anfrage(n)!'; } } catch { /* ignorieren */ } }
   initAccount() {
     $('#fr-search').onclick = () => this.searchPlayers(false); $('#fr-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.searchPlayers(false); }); $('#fr-more').onclick = () => this.searchPlayers(true);
-    $('#fr-login').onclick = () => { audio.click(); this.go('login'); };
+    $('#fr-login').onclick = () => { audio.click(); this.go('login'); }; $('#mm-login').onclick = () => { audio.click(); this.go('login'); };
     let mode = 'login'; const err = (t) => { $('#lg-err').textContent = t || ''; };
     const ownerField = () => { $('#lg-owner').style.display = mode === 'register' && $('#lg-user').value.trim().toLowerCase() === 'aurelio' ? '' : 'none'; };
     $$('#lg-mode button').forEach(b => b.onclick = () => { audio.click(); mode = b.dataset.v; $$('#lg-mode button').forEach(x => x.classList.toggle('on', x === b)); $('#lg-pass').autocomplete = mode === 'login' ? 'current-password' : 'new-password'; err(); ownerField(); });
@@ -424,7 +458,7 @@ export class UI {
     $('#lb-fill').onchange = (e) => { if (host()) g.send({ k: 'set', s: { fillBots: e.target.checked } }); };
   }
   setLobby(d, myId) {
-    this.myId = myId; this.lastLobby = d; const g = this.g, S = d.settings, mode = MODES[S.mode], host = d.host === myId;
+    this.myId = myId; this.lastLobby = d; const g = this.g, S = d.settings, mode = MODES[S.mode], host = d.host === myId && !d.auto;
     if (this.cur !== 'lobby' && !g.inMatch && this.cur !== 'hud') this.showScreenKeep('lobby');
     $('#lobby-code').textContent = d.code; this.lobbyFriendsTick(); { const sig = d.members.map(m => m.id).join(); if (sig !== this._lfSig) { this._lfSig = sig; this.refreshLobbyFriends(); } }
     $('#lobby-count').textContent = `(${d.members.length})`;
@@ -433,9 +467,9 @@ export class UI {
     mark('#lb-diff', S.diff); mark('#lb-time', S.timeLimit); mark('#lb-score', S.scoreLimit); mark('#lb-tod', S.tod);
     for (const id of ['#lb-diff', '#lb-time', '#lb-score', '#lb-tod']) $(id).classList.toggle('locked', !host);
     $('#lb-bots').value = S.bots; $('#lb-bots-v').textContent = mode.size ? 'auto' : S.bots; $('#lb-bots').disabled = !host || mode.size > 0; $('#lb-fill').checked = S.fillBots; $('#lb-fill').disabled = !host || !mode.size;
-    $('#lobby-hostnote').textContent = host ? '(du bist Host)' : '(nur der Host ändert Einstellungen)';
+    $('#lobby-hostnote').textContent = d.auto ? '(Matchmaking – automatisch)' : host ? '(du bist Host)' : '(nur der Host ändert Einstellungen)';
     $('#lobby-start').style.display = host ? '' : 'none'; $('#lobby-shuffle').style.display = host && mode.teams ? '' : 'none';
-    $('#lobby-wait').textContent = host ? `${mode.name} · bis zu ${mode.max} Spieler` : 'Warte auf den Host …';
+    $('#lobby-wait').textContent = d.auto ? 'Das Match startet automatisch, sobald alle da sind …' : host ? `${mode.name} · bis zu ${mode.max} Spieler` : 'Warte auf den Host …';
     // Spielerliste
     const box = $('#lobby-teams'); box.innerHTML = '';
     const mk = (m) => { const t = TEAMS[m.team]; const row = document.createElement('div'); row.className = 'pl' + (m.id === myId ? ' you' : ''); const sk = SKINS.find(x => x.id === m.skin) || SKINS[0]; row.innerHTML = `<span class="av" style="background:${sk.armor};border-color:${t ? t.color : sk.accent}">${esc((m.name || '?').slice(0, 1).toUpperCase())}</span><span>${esc(m.name)}</span><span class="lv">LV ${m.level || 1}</span>${m.id === d.host ? '<span class="crown" title="Host">♛</span><span class="host">HOST</span>' : ''}`; if (host && m.id !== myId) { const k = document.createElement('button'); k.className = 'kick'; k.textContent = '✕'; k.title = 'Entfernen'; k.onclick = () => g.send({ k: 'kick', id: m.id }); row.appendChild(k); } return row; };
@@ -451,7 +485,7 @@ export class UI {
         box.appendChild(t);
       }
       if (unassigned.length) { const t = document.createElement('div'); t.className = 'team'; t.innerHTML = '<div class="th"><span>Noch kein Team (automatisch)</span></div>'; unassigned.forEach(m => t.appendChild(mk(m))); box.appendChild(t); }
-      $$('[data-join]', box).forEach(b => b.onclick = () => { audio.click(); g.send({ k: 'team', team: +b.dataset.join }); });
+      $('[data-join]', box).forEach(b => b.onclick = () => { audio.click(); g.send({ k: 'team', team: +b.dataset.join }); }); if (d.auto) $('[data-join]', box).forEach(b => { b.style.display = 'none'; });
     }
   }
   chat(m) {

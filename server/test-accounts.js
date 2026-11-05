@@ -9,7 +9,7 @@ import { readBackup } from './lib/backup.js';
 
 const quiet = { log() {}, error: console.error };
 const db = await connectPglite(); await migrate(db); await migrate(db); // zweimal: Migration muss idempotent sein
-const app = createApp({ db, config: { ownerUsername: 'Aurelio', ownerCode: 'sekret-code-123' }, log: quiet });
+const app = createApp({ db, config: { ownerUsername: 'Aurelio', ownerCode: 'sekret-code-123', mmSoft: 500, mmMax: 1500 }, log: quiet });
 const port = await app.start(0), base = `http://localhost:${port}`;
 let passed = 0; const ok = (name) => { passed++; console.log('  ✓', name); };
 const call = async (method, path, body, token, headers = {}) => { const r = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined }); let j = {}; try { j = await r.json(); } catch {} return { s: r.status, ...j }; };
@@ -180,6 +180,33 @@ const q_before = app.rooms.size; q_sb.ws.send(JSON.stringify({ k: 'create', sett
 const q_many = []; for (let i = 0; i < 6; i++) q_many.push(await q_openSocial(q_pd.token)); assert.equal(q_many.filter(x => x.got[0].code === 'toomany').length, 1); q_many.forEach(x => x.ws.close()); ok('Höchstens 5 Social-Verbindungen pro Konto');
 q_roomA.ws.close(); q_roomB.ws.close(); await call('POST', '/api/admin/ban', { username: 'Pushb', minutes: 5, reason: 'Test' }, ow.token); await q_nap(300); assert.ok(q_sb.closed && q_sb.got.some(x => x.code === 'banned')); assert.equal(app.parties.partyIdOf(q_pb.user.id), 0); assert.equal(app.parties.parties.size, 0); ok('Bann beendet die Social-Verbindung und entfernt aus der Party (2er-Party löst sich auf)');
 q_sa.ws.close();
+
+console.log('Matchmaking (API)');
+const mq = async (sock, mode) => { sock.ws.send(JSON.stringify({ k: 'mm_queue', mode })); return sock.wait('party_result'); };
+const mkUser = async (n, ip) => { const u = await reg(n, 'Passw0rd!x', {}, ip); const sk = await q_openSocial(u.token); return { u, sk, name: n }; };
+const kill = (code) => { const r = app.rooms.get(code); if (r) { r.destroy(); app.rooms.delete(code); } };
+const [mA, mB, mC, mD, mE] = [await mkUser('Mmaa', '15.0.0.1'), await mkUser('Mmbb', '15.0.0.2'), await mkUser('Mmcc', '15.0.0.3'), await mkUser('Mmdd', '15.0.0.4'), await mkUser('Mmee', '15.0.0.5')];
+assert.equal((await mq(mA.sk, 'banana')).ok, false); ok('Unbekannter Matchmaking-Modus wird abgewiesen');
+await mq(mA.sk, 'duel'); assert.match((await mq(mA.sk, 'ffa')).error, /bereits/); await mq(mB.sk, 'duel');
+const fA = await mA.sk.wait('mm_found', 4000), fB = await mB.sk.wait('mm_found', 4000); assert.ok(fA && fB && fA.code === fB.code && fA.mode === 'duel' && fA.humans === 2 && fA.filled === false); ok('Zwei Spieler suchen 1 gegen 1: beide bekommen in Echtzeit denselben Raum');
+const q2Room = app.rooms.get(fA.code); assert.ok(q2Room && q2Room.mm); const rA = await wsHello({ token: mA.u.token }), rB = await wsHello({ token: mB.u.token });
+rA.ws.send(JSON.stringify({ k: 'join', code: fA.code })); rB.ws.send(JSON.stringify({ k: 'join', code: fA.code })); await q_nap(300);
+rA.ws.send(JSON.stringify({ k: 'set', s: { mode: 'ffa', bots: 11 } })); rA.ws.send(JSON.stringify({ k: 'start' })); rB.ws.send(JSON.stringify({ k: 'team', team: 1 })); await q_nap(300); assert.equal(q2Room.settings.mode, 'duel'); assert.equal(q2Room.state, 'lobby'); ok('Im Matchmaking-Raum kann niemand Einstellungen ändern oder früh starten');
+for (let i = 0; i < 40 && q2Room.state === 'lobby'; i++) await q_nap(150); assert.notEqual(q2Room.state, 'lobby'); assert.equal(q2Room.mm, null); assert.equal(q2Room.humans().length, 2); ok('Sobald alle da sind, startet der Server das Match automatisch');
+rA.ws.close(); rB.ws.close(); kill(fA.code);
+await mq(mC.sk, 'ffa'); const fC = await mC.sk.wait('mm_found', 5000); assert.ok(fC && fC.filled === true && fC.humans === 1 && fC.bots === 5); assert.equal(app.rooms.get(fC.code).settings.bots, 5); assert.equal(app.rooms.get(fC.code).settings.public, false); kill(fC.code); ok('Niemand sonst da: nach der Maximalzeit startet das Match mit Bots (und sagt das ehrlich: filled/bots)');
+await mq(mD.sk, 'tdm'); mD.sk.ws.send(JSON.stringify({ k: 'mm_cancel' })); const cn = await mD.sk.wait('mm_cancelled'); assert.equal(cn.reason, 'Suche abgebrochen.'); assert.equal(app.mm.ticketOf(mD.u.user.id), null); ok('Suche abbrechen funktioniert');
+await mq(mE.sk, 'tdm'); mE.sk.ws.close(); await q_nap(250); assert.equal(app.mm.ticketOf(mE.u.user.id), null); ok('Verliert der Spieler die Verbindung, verschwindet er aus der Warteschlange');
+const stt = await (async () => { await mq(mD.sk, 'ffa'); await q_nap(1300); const st = [...mD.sk.got].reverse().find(m => m.k === 'mm_status' && m.mode === 'ffa'); mD.sk.ws.send(JSON.stringify({ k: 'mm_cancel' })); await mD.sk.wait('party_result'); return st; })(); assert.ok(stt && stt.mode === 'ffa' && stt.cap === 8 && stt.found >= 1); ok('Während der Suche kommen Statusmeldungen (Modus, Gefunden/Platz)');
+// Party sucht gemeinsam
+const pF = await mkUser('Mmff', '15.0.0.6'), pG = await mkUser('Mmgg', '15.0.0.7');
+await call('POST', '/api/friends/request', { target: 'Mmgg' }, pF.u.token); await call('POST', '/api/friends/accept', { target: 'Mmff' }, pG.u.token);
+pF.sk.ws.send(JSON.stringify({ k: 'party_invite', target: 'Mmgg' })); await pF.sk.wait('party_result'); pG.sk.ws.send(JSON.stringify({ k: 'party_accept', from: 'Mmff' })); await pG.sk.wait('party_result');
+assert.match((await mq(pG.sk, 'v2')).error, /Party-Leiter/); assert.match((await mq(pF.sk, 'duel')).error, /passt nicht/); ok('Party: nur der Leiter sucht, und die Party muss in die Teamgröße passen');
+assert.equal((await mq(pF.sk, 'v2')).ok, true); const pf1 = await pF.sk.wait('mm_found', 5000), pf2 = await pG.sk.wait('mm_found', 5000); assert.ok(pf1 && pf2 && pf1.code === pf2.code && pf1.humans === 2 && pf1.filled === true); const pr = app.rooms.get(pf1.code); assert.equal(pr.mm.expect.size, 2); kill(pf1.code); ok('Eine Party sucht gemeinsam: beide Mitglieder landen im selben Match');
+await mq(pF.sk, 'v2'); pG.sk.ws.send(JSON.stringify({ k: 'party_leave' })); const pc = await pF.sk.wait('mm_cancelled', 3000); assert.ok(pc && /Party/.test(pc.reason)); ok('Ändert sich die Party während der Suche, wird die Suche beendet');
+await call('POST', '/api/admin/flag', { key: 'matchmaking', value: false }, ow.token); mD.sk.got.forEach(m => { m._seen = true; }); assert.match((await mq(mD.sk, 'ffa')).error, /deaktiviert/); await call('POST', '/api/admin/flag', { key: 'matchmaking', value: true }, ow.token); ok('Feature-Flag schaltet das Matchmaking ab');
+for (const x of [mA, mB, mC, mD, mE, pF, pG]) x.sk.ws.close();
 
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');

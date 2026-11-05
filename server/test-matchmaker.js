@@ -1,0 +1,31 @@
+// Tests der Matchmaking-Logik (ohne Netzwerk, mit künstlicher Uhr).
+import assert from 'node:assert/strict';
+import { Matchmaker, MM_MODES, SOFT_WAIT, MAX_WAIT } from './lib/matchmaker.js';
+
+let passed = 0; const ok = (n) => { passed++; console.log('  ✓', n); };
+let clock = 0; const matches = [], cancels = [], statuses = []; let validFn = () => true;
+const mk = () => { clock = 0; matches.length = cancels.length = statuses.length = 0; validFn = () => true; return new Matchmaker({ now: () => clock, onMatch: (m) => matches.push(m), onCancel: (t, r) => cancels.push([t.id, r]), onStatus: (t, s) => statuses.push([t.id, s]), valid: (t) => validFn(t) }); };
+let uid = 0; const solo = (mm, mode, rating = 100) => mm.queue({ mode, members: [{ userId: ++uid, name: 'P' + uid, rating }] });
+const party = (mm, mode, n, rating = 100, pid = 9) => mm.queue({ mode, party: pid, members: Array.from({ length: n }, () => ({ userId: ++uid, name: 'P' + uid, rating })) });
+const adv = (mm, ms) => { clock += ms; mm.tick(); };
+
+console.log('Matchmaking');
+{ const mm = mk(); assert.match(mm.queue({ mode: 'xyz', members: [{ userId: 1, name: 'A', rating: 0 }] }).error, /Unbekannt/); assert.match(party(mm, 'duel', 2).error, /passt nicht/); assert.match(party(mm, 'v2', 3).error, /passt nicht/); assert.ok(party(mm, 'v3', 3).ok); ok('Ungültiger Modus und zu große Party für die Teamgröße werden abgewiesen'); }
+{ const mm = mk(); const r = solo(mm, 'ffa'); assert.ok(r.ok); assert.match(mm.queue({ mode: 'tdm', members: [{ userId: uid, name: 'X', rating: 0 }] }).error, /bereits/); ok('Ein Spieler kann nur einmal gleichzeitig suchen'); }
+{ const mm = mk(); solo(mm, 'duel', 100); solo(mm, 'duel', 180); adv(mm, 1000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 2); assert.equal(matches[0].bots, 0); assert.equal(matches[0].filled, false); assert.equal(mm.size(), 0); ok('1 gegen 1: zwei ähnlich starke Spieler werden sofort gepaart, keine Bots'); }
+{ const mm = mk(); solo(mm, 'duel', 0); solo(mm, 'duel', 900); adv(mm, 5000); assert.equal(matches.length, 0); ok('Sehr unterschiedlicher Rang: anfangs kein Match (Rang-Fenster)'); }
+{ const mm = mk(); solo(mm, 'duel', 0); solo(mm, 'duel', 500); adv(mm, 1000); assert.equal(matches.length, 0); adv(mm, 9000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 2); ok('Das Rang-Fenster wächst mit der Wartezeit – nach 10 s finden sich 0 und 500 Punkte'); }
+{ const mm = mk(); solo(mm, 'duel', 0); solo(mm, 'duel', 2000); adv(mm, MAX_WAIT); assert.equal(matches.length, 2); assert.ok(matches.every(m => m.humans === 1 && m.filled === true)); assert.equal(mm.size(), 0); ok('Passt niemand zusammen, startet nach der Maximalzeit jeder allein – mit Bots als Gegner (kein ewiges Warten)'); }
+{ const mm = mk(); for (let i = 0; i < 4; i++) solo(mm, 'ffa'); adv(mm, SOFT_WAIT - 1000); assert.equal(matches.length, 0); adv(mm, 1000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 4); assert.equal(matches[0].bots, MM_MODES.ffa.bots - 4); ok('Free for All: 4 Spieler starten nach der Mindestwartezeit, der Rest wird mit Bots aufgefüllt'); }
+{ const mm = mk(); for (let i = 0; i < 8; i++) solo(mm, 'ffa'); adv(mm, 1000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 8); assert.equal(matches[0].bots, 0); ok('Volle Gruppe (8) startet sofort ohne Bots'); }
+{ const mm = mk(); for (let i = 0; i < 3; i++) solo(mm, 'tdm'); adv(mm, SOFT_WAIT + 1000); assert.equal(matches.length, 0); adv(mm, MAX_WAIT); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 3); assert.equal(matches[0].bots, 5); ok('Zu wenige Spieler für „Mindestzahl“: erst nach der Maximalzeit, dann mit Bots'); }
+{ const mm = mk(); party(mm, 'v2', 2, 100, 1); party(mm, 'v2', 2, 120, 2); adv(mm, 1000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 4); assert.equal(matches[0].tickets.length, 2); ok('2 gegen 2: zwei 2er-Parties füllen ein Match'); }
+{ const mm = mk(); party(mm, 'v2', 2, 100, 1); solo(mm, 'v2'); solo(mm, 'v2'); adv(mm, 1000); assert.equal(matches.length, 1); assert.equal(matches[0].humans, 4); ok('Party + zwei Einzelspieler werden zusammen gepackt'); }
+{ const mm = mk(); for (let i = 0; i < 4; i++) solo(mm, 'duel'); adv(mm, 1000); assert.equal(matches.length, 2); ok('Mehrere Matches im selben Durchlauf'); }
+{ const mm = mk(); solo(mm, 'duel'); solo(mm, 'ffa'); adv(mm, 2000); assert.equal(matches.length, 0); ok('Verschiedene Modi werden nie gemischt'); }
+{ const mm = mk(); const r = solo(mm, 'ffa'); adv(mm, 2000); const st = statuses.filter(([id]) => id === r.ticket.id).pop()[1]; assert.deepEqual([st.mode, st.waited, st.found, st.cap, st.stage], ['ffa', 2, 1, 8, 'searching']); adv(mm, MAX_WAIT - 6000); assert.equal(statuses.filter(([id]) => id === r.ticket.id).pop()[1].stage, 'filling'); ok('Statusmeldungen: Wartezeit, gefundene Spieler, Phase (Suche → Auffüllen)'); }
+{ const mm = mk(); const r = solo(mm, 'ffa'); assert.ok(mm.cancel(r.ticket.id, 'Suche abgebrochen.')); assert.deepEqual(cancels[0], [r.ticket.id, 'Suche abgebrochen.']); assert.equal(mm.ticketOf(r.ticket.members[0].userId), null); assert.ok(solo(mm, 'ffa').ok); const u = uid; assert.ok(mm.cancelUser(u, 'weg')); assert.equal(mm.cancelUser(u, 'weg'), false); ok('Abbrechen entfernt das Ticket und meldet den Grund; der Spieler kann neu suchen'); }
+{ const mm = mk(); const r = party(mm, 'v2', 2, 100, 5); validFn = () => false; adv(mm, 1000); assert.equal(mm.size(), 0); assert.match(cancels[0][1], /Party geändert/); assert.equal(mm.ticketOf(r.ticket.members[0].userId), null); ok('Ungültig gewordene Tickets (z. B. Party-Änderung) werden verworfen'); }
+{ const mm = mk(); solo(mm, 'ffa', 0); solo(mm, 'ffa', 5000); for (let i = 0; i < 2; i++) solo(mm, 'ffa', 0); for (let i = 0; i < 2; i++) solo(mm, 'ffa', 20); adv(mm, SOFT_WAIT); assert.equal(matches.length, 1); assert.ok(matches[0].tickets.every(t => t.rating < 100)); assert.equal(matches[0].humans, 5); assert.equal(mm.size(), 1); ok('Ein weit entfernter Rang (5000) wird nicht in die Gruppe der ähnlich Starken gezogen'); }
+
+console.log(`\n${passed} Matchmaking-Tests bestanden`); process.exit(0);

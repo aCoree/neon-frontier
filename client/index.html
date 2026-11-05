@@ -27,6 +27,7 @@
   <div class="menu-left">
     <div class="logo"><span>NEON</span><b>FRONTIER</b><small>3D MULTIPLAYER SHOOTER</small></div>
     <nav class="menu-btns">
+      <button class="mbtn mm" data-go="mm"><i>⚔</i><span>Match suchen<small id="mm-sub">Gegen Spieler online</small></span></button>
       <button class="mbtn" data-go="solo"><i>▶</i><span>Spielen<small>Solo gegen Bots</small></span></button>
       <button class="mbtn" data-go="multi"><i>◈</i><span>Multiplayer<small>Mit Freunden online</small></span></button>
       <button class="mbtn" data-act="private"><i>⚿</i><span>Private Lobby<small>Raum + Einladungslink</small></span></button>
@@ -119,6 +120,20 @@
         <h4>Top 25 <small id="se-me-line"></small></h4>
         <div class="rooms se-board" id="se-board" style="max-height:62vh"></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= MATCHMAKING ================= -->
+<section id="s-mm" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Match suchen</h2></header>
+    <div id="mm-guest" class="empty" style="display:none">Matchmaking braucht ein Konto (Rang &amp; Party). <button class="link" id="mm-login">Anmelden</button> – oder nutze „Multiplayer“ für offene Räume.</div>
+    <div id="mm-main">
+      <h4>Spielmodus</h4><div class="cards" id="mm-modes"></div>
+      <p class="hint" id="mm-hint"></p>
+      <p class="hint">Du wirst nach Rang mit anderen Spielern zusammengebracht. Findet sich nach kurzer Zeit niemand, startet das Match mit Bots als Auffüllung – das siehst du vorher im Suchfenster.</p>
+      <div class="row end"><button class="btn primary big" id="mm-start">Suche starten</button></div>
     </div>
   </div>
 </section>
@@ -324,6 +339,7 @@
 <div id="conn"></div>
 <div id="toasts"></div>
 <div id="notifs" aria-live="polite"></div>
+<div id="mm-bar" role="status" aria-live="polite"><div class="mmb-spin"></div><div class="mmb-txt"><b id="mmb-title">Suche läuft …</b><small id="mmb-sub"></small></div><span id="mmb-time">0:00</span><button class="btn small danger" id="mmb-cancel">Abbrechen</button></div>
 <div id="dlg" class="dlg" aria-hidden="true"><div class="dlg-box" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
   <h3 id="dlg-title"></h3><div id="dlg-body"></div><input id="dlg-input" autocomplete="off" spellcheck="false"><div class="dlg-err" id="dlg-err"></div>
   <div class="dlg-row"><button class="btn" id="dlg-cancel">Abbrechen</button><button class="btn primary" id="dlg-ok">OK</button></div></div></div>

@@ -6,7 +6,7 @@ import { exportBackup } from './backup.js';
 import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
-export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, analytics: true, maintenance: false };
+export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, analytics: true, matchmaking: true, maintenance: false };
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
@@ -225,7 +225,7 @@ export class Api {
     try {
       const ip = this.ip(req);
       if (this.rl.hit('api:' + ip, 240, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' }), true;
-      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop, friends: this.flags.friends, seasons: this.flags.seasons } }), true;
+      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop, friends: this.flags.friends, seasons: this.flags.seasons, matchmaking: this.flags.matchmaking } }), true;
       if (!this.db || !this.flags.accounts) return this.send(res, 503, { error: 'Konten sind auf diesem Server nicht aktiviert.' }), true;
       const m = req.method;
       if (m === 'POST' && url === '/api/register') return await this.register(req, res, ip), true;

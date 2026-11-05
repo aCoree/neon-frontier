@@ -9,6 +9,7 @@ import { MODES } from '../client/js/shared/defs.js';
 import { Api } from './lib/api.js';
 import { Analytics } from './lib/analytics.js';
 import { Parties } from './lib/party.js';
+import { Matchmaker, MM_MODES } from './lib/matchmaker.js';
 import { applyMatchResult } from './lib/progression.js';
 import { can, filterText } from './lib/auth.js';
 
@@ -43,11 +44,50 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   api = new Api({
     db, stats, notify, config, log, presence, metrics: () => metricsSnapshot(),
     rooms: () => [...rooms.values()].map(r => ({ code: r.code, state: r.state, mode: r.settings.mode, players: r.humans().length, matchId: r.matchId })),
-    onBan: (userId, reason) => { parties.leave(userId); for (const c of [...(social.get(userId) || [])]) { c.send({ k: 'err', code: 'banned', text: 'Dein Konto wurde gesperrt.' }); c.close(); } for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
+    onBan: (userId, reason) => { parties.leave(userId); mm.cancelUser(userId, 'Konto gesperrt.'); for (const c of [...(social.get(userId) || [])]) { c.send({ k: 'err', code: 'banned', text: 'Dein Konto wurde gesperrt.' }); c.close(); } for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
   });
   const newCode = () => { for (let i = 0; i < 200; i++) { let c = ''; for (let k = 0; k < 4; k++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; if (!rooms.has(c)) return c; } return 'R' + Date.now().toString(36).slice(-3).toUpperCase(); };
 
   const json = (res, o) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(o)); };
+  const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, emotesAllowed: () => api.flags.emotes, track: (m, d) => stats.inc(m, d), filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
+  async function finishMatch(r, matchId, results) {
+    if (!db) return;
+    const mode = r.settings.mode, secs = Math.round(r.T - (r.matchStart || 0)), humans = r.humans().length;
+    stats.inc('match_end', mode); stats.inc('match_secs', mode, secs); stats.inc('match_humans', mode, humans);
+    for (const x of results) {
+      try {
+        const rew = await applyMatchResult(db, x.userId, matchId, { kills: x.kills, deaths: x.deaths, hs: x.hs, dmg: x.dmg, won: x.won, secs: x.secs, humans: x.humans, ranked: x.ranked && api.flags.ranked });
+        if (rew) r.send(x.member, { k: 'reward', matchId, ...rew });
+      } catch (e) { M.errors++; log.error('[db] Match-Ergebnis', e.message); }
+    }
+  }
+
+  // ---------- Matchmaking ----------
+  const mm = new Matchmaker({
+    soft: config.mmSoft, max: config.mmMax,
+    valid: (t) => t.members.every(m => (social.get(m.userId)?.size || 0) > 0) && (!t.party || (() => { const p = parties.parties.get(t.party); return !!p && p.members.length === t.members.length && t.members.every(m => p.members.includes(m.userId)); })()),
+    onStatus: (t, st) => { for (const m of t.members) notify(m.userId, { k: 'mm_status', ...st }); },
+    onCancel: (t, reason) => { for (const m of t.members) notify(m.userId, { k: 'mm_cancelled', reason }); },
+    onMatch: ({ mode, tickets, humans, bots, filled }) => {
+      const code = newCode(), cfg = MM_MODES[mode], hooks = hooksFor();
+      const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false }, hooks }); hooks.room = room;
+      room.mm = { expect: new Set(tickets.flatMap(t => t.members.map(m => m.userId))), created: Date.now(), deadline: Date.now() + 25000 };
+      rooms.set(code, room); stats.inc('mm_match', mode); if (filled) stats.inc('mm_filled', mode);
+      log.log(`[mm] ${mode}: ${humans} Spieler${filled ? ' + Bots' : ''} → Raum ${code}`);
+      for (const t of tickets) for (const m of t.members) notify(m.userId, { k: 'mm_found', code, mode, humans, bots: cfg.bots ? bots : Math.max(0, cfg.cap - humans), filled });
+    },
+  });
+  // Matchmaking-Räume starten automatisch, sobald alle da sind – oder nach der Frist mit den Anwesenden
+  const mmRooms = () => {
+    const now = Date.now();
+    for (const [code, r] of rooms) {
+      if (!r.mm || r.state !== 'lobby') continue;
+      const here = new Set(r.humans().map(m => m.userId)), all = [...r.mm.expect].every(u => here.has(u));
+      if (all && now - r.mm.created > 2500) { r.mm = null; r.start(); }
+      else if (now > r.mm.deadline) { if (r.humans().length) { r.mm = null; r.start(); } else { r.destroy(); rooms.delete(code); } }
+    }
+  };
+
   const server = http.createServer(async (req, res) => {
     const url = decodeURIComponent((req.url || '/').split('#')[0]);
     const route = url.split('?')[0];
@@ -71,18 +111,6 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     const client = { send(o, raw) { if (ws.readyState === 1) { try { const d = raw ? o : JSON.stringify(o); M.bytesOut += d.length; ws.send(d); } catch { /* Verbindung weg */ } } }, close() { try { ws.close(); } catch { /* ignore */ } } };
     let room = null, member = null, profile = null, bucket = 120, lastRefill = Date.now(), chain = Promise.resolve();
 
-    const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, emotesAllowed: () => api.flags.emotes, track: (m, d) => stats.inc(m, d), filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
-    async function finishMatch(r, matchId, results) {
-      if (!db) return;
-      const mode = r.settings.mode, secs = Math.round(r.T - (r.matchStart || 0)), humans = r.humans().length;
-      stats.inc('match_end', mode); stats.inc('match_secs', mode, secs); stats.inc('match_humans', mode, humans);
-      for (const x of results) {
-        try {
-          const rew = await applyMatchResult(db, x.userId, matchId, { kills: x.kills, deaths: x.deaths, hs: x.hs, dmg: x.dmg, won: x.won, secs: x.secs, humans: x.humans, ranked: x.ranked && api.flags.ranked });
-          if (rew) r.send(x.member, { k: 'reward', matchId, ...rew });
-        } catch (e) { M.errors++; log.error('[db] Match-Ergebnis', e.message); }
-      }
-    }
     async function onMessage(msg) {
       if (msg.k === 'hello') {
         let acct = null;
@@ -131,9 +159,21 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       if (msg.k === 'refreshmutes') { loadMutes(); return; }
       if (room && member) room.handle(member, msg);
     }
+    // Match suchen / Suche abbrechen. Eine Party sucht gemeinsam; nur der Leiter darf die Suche starten und beenden.
+    async function handleMatchmaking(msg, uid, reply) {
+      if (msg.k === 'mm_cancel') { const t = mm.ticketOf(uid); if (!t) return reply(true); const p = parties.get(uid); if (p && p.leader !== uid) return reply(false, 'Nur der Party-Leiter kann die Suche abbrechen.'); mm.cancel(t.id, 'Suche abgebrochen.'); return reply(true); }
+      if (!api.flags.matchmaking) return reply(false, 'Das Matchmaking ist gerade deaktiviert.');
+      if (api.rl.hit('mmq:' + uid, 10, 60000)) return reply(false, 'Zu viele Anfragen. Bitte kurz warten.');
+      const p = parties.get(uid); if (p && p.leader !== uid) return reply(false, 'Nur der Party-Leiter kann ein Match suchen.');
+      const ids = p ? p.members : [uid]; for (const id of ids) if (!(social.get(id)?.size)) return reply(false, parties.name(id) + ' ist nicht verbunden.');
+      const rows = await db.all('SELECT user_id, rank_points FROM user_stats WHERE user_id = ANY($1::bigint[])', [ids]), rp = new Map(rows.map(r => [Number(r.user_id), r.rank_points]));
+      const r = mm.queue({ members: ids.map(id => ({ userId: id, name: id === uid ? profile.name : parties.name(id), rating: rp.get(id) || 0 })), mode: String(msg.mode || ''), party: p ? p.id : 0 });
+      if (r.ok) stats.inc('mm_queue', String(msg.mode)); return reply(r.ok, r.error, { mode: msg.mode });
+    }
     // Party-Befehle über die Social-Verbindung. Alle Rechte prüft der Server: nur Freunde einladen, nur der Leiter lädt ein/entfernt/nimmt mit.
     async function handleSocial(msg) {
       const uid = profile.userId, reply = (ok, error, extra) => client.send({ k: 'party_result', action: msg.k, ok, error, ...extra });
+      if (msg.k === 'mm_queue' || msg.k === 'mm_cancel') return handleMatchmaking(msg, uid, reply);
       if (!msg.k.startsWith('party_')) return;
       if (!api.flags.friends) return reply(false, 'Das Freunde-System ist gerade deaktiviert.');
       if (api.rl.hit('party:' + uid, 60, 60000)) return reply(false, 'Zu viele Anfragen. Bitte kurz warten.');
@@ -168,7 +208,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       chain = chain.then(() => onMessage(msg)).catch((e) => { M.errors++; log.error('Fehler bei Nachricht', msg.k, e); });  // Nachrichten pro Verbindung strikt nacheinander
     });
     function leave() { if (room && member) { try { room.removeMember(member, true); } catch (e) { log.error(e); } } room = null; member = null; }
-    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) { social.delete(profile.userId); parties.drop(profile.userId); } } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
+    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) { social.delete(profile.userId); parties.drop(profile.userId); mm.cancelUser(profile.userId, 'Verbindung verloren.'); } } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
     ws.on('error', () => {});
   });
 
@@ -178,11 +218,12 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       if (room.emptyAt && Date.now() - room.emptyAt > 20000) { room.destroy(); rooms.delete(code); log.log(`[room ${code}] entfernt (leer)`); }
     }
   }, 25);
+  const mmTimer = setInterval(() => { try { mm.tick(); mmRooms(); } catch (e) { M.errors++; log.error('[mm] Fehler', e); } }, 1000); mmTimer.unref?.();
   const pingTimer = setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; try { ws.ping(); } catch { /* ignore */ } } }, 15000);
 
   return {
-    server, api, rooms, wss, stats, parties,
+    server, api, rooms, wss, stats, parties, mm,
     async start(port) { await api.init(); stats.start(); await new Promise(r => server.listen(port, r)); return server.address().port; },
-    async stop() { await stats.stop().catch(() => {}); clearInterval(tickTimer); clearInterval(pingTimer); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(r => server.close(r)); },
+    async stop() { await stats.stop().catch(() => {}); clearInterval(tickTimer); clearInterval(pingTimer); clearInterval(mmTimer); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(r => server.close(r)); },
   };
 }

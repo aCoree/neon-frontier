@@ -182,3 +182,10 @@ input:focus{border-color:var(--c1);box-shadow:0 0 12px rgba(126,232,255,.25)}
 .pp-m{display:flex;align-items:center;gap:8px;padding:5px 0}.pp-m .av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:900 13px var(--disp);color:#fff;border:2px solid var(--c1);flex:none}.pp-m .nm{font:800 15px var(--font);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pp-m .nm small{color:var(--dim);font:600 12px var(--font);margin-left:6px}
 .pp-m .on{width:8px;height:8px;border-radius:50%;background:var(--good,#4dff8a);box-shadow:0 0 6px var(--good,#4dff8a)}.pp-m .on.off{background:#556;box-shadow:none}.pp-m .crown{color:#ffd25a}.pp-m button{background:none;border:1px solid var(--line);color:var(--txt);padding:1px 7px;cursor:pointer;font:700 12px var(--font)}.pp-m button:hover{border-color:var(--c1)}
 #pp-add{width:100%;margin-top:6px}
+
+/* Matchmaking */
+.mbtn.mm{border-left-color:var(--c3);background:linear-gradient(90deg,rgba(40,30,8,.85),rgba(8,14,28,.35))}
+@media (max-height:840px){.menu-btns{gap:4px}.mbtn{padding:6px 18px;font-size:18px}.mbtn small{font-size:12px}}
+#mm-bar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:140;display:none;align-items:center;gap:14px;background:rgba(8,12,24,.95);border:1px solid var(--line);border-bottom:3px solid var(--c3);padding:10px 16px;box-shadow:0 6px 28px rgba(0,0,0,.5);clip-path:polygon(14px 0,100% 0,100% 100%,0 100%,0 14px)}
+#mm-bar.show{display:flex;animation:ncin .25s}.mmb-spin{width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.15);border-top-color:var(--c3);animation:spin 1s linear infinite;flex:none}@keyframes spin{to{transform:rotate(360deg)}}
+.mmb-txt b{display:block;font:800 16px var(--font);letter-spacing:.05em;text-transform:uppercase}.mmb-txt small{display:block;color:var(--dim);font:600 13px var(--font)}#mmb-time{font:800 20px var(--disp);color:var(--c3);min-width:48px;text-align:right}#mm-bar.found{border-bottom-color:var(--good,#4dff8a)}#mm-bar.found .mmb-spin{border-top-color:var(--good,#4dff8a);animation:none}

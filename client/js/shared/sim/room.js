@@ -55,7 +55,7 @@ export class Room {
     return m;
   }
   lobbyData() {
-    return { k: 'lobby', code: this.code, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level, acct: m.userId ? 1 : 0 })) };
+    return { k: 'lobby', code: this.code, auto: this.mm ? 1 : 0, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level, acct: m.userId ? 1 : 0 })) };
   }
   lobbyUpdate() { this.all(this.lobbyData()); }
   removeMember(m, hard = true) {
@@ -76,6 +76,7 @@ export class Room {
   handle(m, msg) {
     if (!msg || typeof msg.k !== 'string') return;
     m.lastSeen = Date.now();
+    if (this.mm && ['set', 'team', 'shuffle', 'start', 'kick'].includes(msg.k)) return;   // Matchmaking-Raum: der Server startet das Match, niemand verstellt Einstellungen/Teams
     switch (msg.k) {
       case 'ping': if (typeof msg.rtt === 'number') m.rtt = clamp(lerp(m.rtt, msg.rtt, 0.3), 0.01, 1); this.send(m, { k: 'pong', t: msg.t, T: this.T }); return;
       case 'chat': {
