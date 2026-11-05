@@ -1,6 +1,6 @@
 // Haupt-Spiellogik im Client: Zustand, Netzwerk-Events, Entitäten, Effekte, Schleife.
 import * as THREE from 'three';
-import { WEAPONS, MODES, TEAMS, FL, GADGETS, THROWABLES, CONSUMABLES, xpForLevel, SKINS, AMMO } from '../shared/defs.js';
+import { WEAPONS, MODES, TEAMS, FL, GADGETS, THROWABLES, CONSUMABLES, xpForLevel, SKINS, AMMO, EMOTES } from '../shared/defs.js';
 import { World, rayCylinder } from '../shared/world.js';
 import { moverY, zoneAt } from '../shared/mapdata.js';
 import { clamp, lerp, angDiff } from '../shared/util.js';
@@ -9,7 +9,7 @@ import { Input } from './input.js';
 import { LocalPlayer } from './player.js';
 import { Combat } from './combat.js';
 import { Net, LocalNet, resolveServerUrl } from './net.js';
-import { RemoteEnt, PickupView, DroneView } from './entities.js';
+import { RemoteEnt, PickupView, DroneView, EmoteView } from './entities.js';
 import { Progress } from './progress.js';
 import { audio } from './audio.js';
 import { FX } from '../render/fx.js';
@@ -25,7 +25,7 @@ export class Game {
     this.input = new Input(canvas); this.audio = audio;
     this.settings = Progress.d.settings;
     this.mode = 'menu'; this.ui = null; this.net = null; this.ents = new Map(); this.you = null; this.lobby = null; this.roomCode = null; this.isHost = false; this.inMatch = false;
-    this.pickups = new PickupView(this.scene); this.drones = new DroneView(this.scene);
+    this.pickups = new PickupView(this.scene); this.drones = new DroneView(this.scene); this.emotes = new EmoteView(this.scene);
     this.projs = []; this.smokes = []; this.supplies = []; this.markers = []; this.beacons = [];
     this.hp = 100; this.shield = 0; this.alive = false; this.ctrl = false; this.paused = false; this.gadget = null; this.power = { speed: 0, jump: 0, barrier: 0 }; this.barrierHp = 0;
     this.srvT = 0; this.srvLocal = performance.now(); this.lowgravUntil = 0; this.shakeV = 0; this.stAcc = 0; this.t = 0; this.hitFlash = 0; this.scanUntil = 0; this.scanIds = new Set();
@@ -97,7 +97,7 @@ export class Game {
   leaveRoom() { if (this.net) { this.net.leave && this.net.leave(); } this.roomCode = null; this.lobby = null; }
   leaveToMenu() {
     if (this.inMatch) this.endMatchLocal();
-    this.disconnect(); this.enterMenu(); this.ui.showScreen('menu');
+    this.disconnect(); this.emotes.clear(); this.enterMenu(); this.ui.showScreen('menu');
   }
 
   // =================== Match-Beginn ===================
@@ -121,7 +121,7 @@ export class Game {
     this.enterPlay();
   }
   resetMatch(m) {
-    for (const e of this.ents.values()) e.dispose(); this.ents.clear(); this.pickups.clear(); this.clearTransient();
+    for (const e of this.ents.values()) e.dispose(); this.ents.clear(); this.pickups.clear(); this.emotes.clear(); this.clearTransient();
     this.stats = this.freshStats(); this.combat.reset(this.training); this.hp = 100; this.shield = 0; this.gadget = null; this.power = { speed: 0, jump: 0, barrier: 0 };
     this.you = m.you; this.alive = false; this.player.alive = false; this.matchEnded = false;
     for (const i of m.ents) this.addEnt(i);
@@ -185,6 +185,11 @@ export class Game {
       case 'go': { this.ctrl = true; this.ui.countdown('LOS!'); audio.countdown(true); break; }
       case 'shot': this.onShot(ev, now); break;
       case 'swing': { const e = this.ents.get(ev.id); if (e && !e.self) { e.char.melee(); audio.shot('blade', e.pos); } break; }
+      case 'emote': {   // Blase über dem Spieler; stummgeschaltete Spieler werden ausgeblendet
+        const e = this.ents.get(ev.id); if (!e || (!e.self && Account.mutes.has(e.info?.name))) break;
+        this.emotes.show(ev.id, ev.e); if (!e.self) { const p = new THREE.Vector3(); if (this.entPos(ev.id, p)) audio.emote(p); } else audio.emote();
+        break;
+      }
       case 'dash': { const e = this.ents.get(ev.id); if (e && !e.self) { e.char.dash(); audio.dash(); } break; }
       case 'hit': this.onHit(ev, now); break;
       case 'kill': this.onKill(ev, now); break;
@@ -503,6 +508,7 @@ export class Game {
     this.fx.update(dt, this.camera);
     this.updateProjs(dt); this.updateSupplies(dt, now); this.drones.update(dt, this.t);
     this.pickups.update(dt, this.t, this.camera.position);
+    this.emotes.update(dt, (id, out) => { const e = this.ents.get(id); return !!(e && (e.self ? this.alive : e.alive && e.visible !== false) && this.entPos(id, out)); }, this.camera.position);
     this.updateMovers();
     // Tageszeit
     this.todTimer -= dt;
@@ -534,12 +540,20 @@ export class Game {
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right, side); this.camera.lookAt(target.clone().addScaledVector(right, side * 0.5));
     this.audio.updateListener(this.camera.position, 0);
   }
+  // B halten → Emote-Rad; Zifferntasten 1–8 wählen (die Ziffern werden dabei NICHT als Waffenwechsel gezählt)
+  updateEmoteInput() {
+    const inp = this.input, want = !!(this.alive && this.ctrl && Account.flags.emotes !== false && inp.down('KeyB') && !this.ui.chatOpen);
+    if (want !== !!this.emoteOpen) { this.emoteOpen = want; this.ui.emoteWheel(want); }
+    if (!want) return;
+    for (let i = 0; i < EMOTES.length; i++) { const code = 'Digit' + (i + 1); if (inp.hit(code)) { inp.pressed.delete(code); this.ui.sendEmote(i); } }
+  }
   updatePlay(dt, now) {
     const p = this.player, c = this.combat, ch = this.char, eng = this.engine;
     // Pointer-Lock-Zustand
     if (this.countdownTick) this.countdownTick();
     if (this.startAt && this.T() < this.startAt) { const n = Math.ceil(this.startAt - this.T()); if (n !== this.countdownN && n <= 4 && n > 0) { this.countdownN = n; this.ui.countdown(String(n)); audio.countdown(false); } }
     // Spielerlogik
+    this.updateEmoteInput();
     p.update(dt);
     const wDef = c.def;
     c.update(dt, this.input, p, now);

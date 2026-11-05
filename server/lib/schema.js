@@ -81,4 +81,16 @@ export const MIGRATIONS = [
     CREATE UNIQUE INDEX IF NOT EXISTS friendships_pair_idx ON friendships (LEAST(requester, addressee), GREATEST(requester, addressee));
     CREATE INDEX IF NOT EXISTS friendships_addressee_idx ON friendships (addressee)
   ` },
+  { v: 5, name: 'seasons', sql: `
+    CREATE TABLE IF NOT EXISTS season_stats (
+      season_id INT NOT NULL, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      points INT NOT NULL DEFAULT 0, matches INT NOT NULL DEFAULT 0, wins INT NOT NULL DEFAULT 0, kills INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (season_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS season_stats_rank_idx ON season_stats (season_id, points DESC);
+    CREATE TABLE IF NOT EXISTS season_claims (
+      season_id INT NOT NULL, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, tier INT NOT NULL,
+      coins INT NOT NULL, claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (season_id, user_id, tier)
+    );
+  ` },
 ];

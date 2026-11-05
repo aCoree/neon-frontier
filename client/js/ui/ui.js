@@ -1,5 +1,5 @@
 // Benutzeroberfläche: Menüs, Lobby, HUD, Ergebnis, Einstellungen, Skins, Erfolge.
-import { CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel } from '../shared/defs.js';
+import { EMOTES, EMOTE_COOLDOWN, CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel } from '../shared/defs.js';
 import { Progress } from '../game/progress.js';
 import { audio } from '../game/audio.js';
 import { QUALITY } from '../render/engine.js';
@@ -71,6 +71,7 @@ export class UI {
     if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
+    if (name === 'season') this.openSeason();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     $('#clickhint').classList.remove('show');
@@ -89,6 +90,7 @@ export class UI {
     if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
+    if (name === 'season') this.openSeason();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     if (name === 'solo') this.refreshSolo();
@@ -115,9 +117,60 @@ export class UI {
     }
     const dl = Account.inv && Account.inv.daily; $('#pc-daily').style.display = u && dl && dl.enabled && dl.canClaim ? '' : 'none';
     $('#pc-rename').style.display = u ? 'none' : ''; $('#pc-logout').style.display = u ? '' : 'none'; $('#pc-login').style.display = !u && Account.available ? '' : 'none';
+    const ss = $('#season-sub'); if (ss) ss.textContent = u ? 'Rangliste & Belohnungen' : 'Mit Konto: Rangliste & Belohnungen';
     $('#ach-count').textContent = `${Object.keys(d.ach).length} / ${ACHIEVEMENTS.length}`;
   }
   ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
+
+  // ---------- Emote-Rad ----------
+  buildEmoteWheel() {
+    const w = $('#emote-wheel'); if (!w || w.dataset.built) return; w.dataset.built = '1';
+    EMOTES.forEach((em, i) => {
+      const a = (i / EMOTES.length) * Math.PI * 2 - Math.PI / 2, b = document.createElement('div'); b.className = 'ew';
+      b.style.left = Math.round(Math.cos(a) * 150) + 'px'; b.style.top = Math.round(Math.sin(a) * 120) + 'px';
+      const ic = document.createElement('span'); ic.textContent = em.icon; const k = document.createElement('small'); k.textContent = (i + 1) + ' · ' + em.label; b.append(ic, k);
+      b.onclick = () => this.sendEmote(i); w.appendChild(b);
+    });
+  }
+  emoteWheel(show) { this.buildEmoteWheel(); $('#emote-wheel').classList.toggle('show', !!show); }
+  sendEmote(i) {
+    const now = performance.now(); if (now < (this.emoteReadyAt || 0)) return;
+    this.emoteReadyAt = now + EMOTE_COOLDOWN * 1000; this.g.send({ k: 'emote', id: EMOTES[i].id });
+    const w = $('#emote-wheel'); w.classList.add('cd'); setTimeout(() => w.classList.remove('cd'), EMOTE_COOLDOWN * 1000);
+  }
+
+  // ---------- Season ----------
+  async openSeason() {
+    const guest = !Account.user; $('#se-guest').style.display = guest ? '' : 'none'; $('#se-main').style.display = guest ? 'none' : ''; $('#se-off').style.display = 'none';
+    if (guest) return; await this.refreshSeason();
+  }
+  async refreshSeason(data) {
+    let d = data; if (!d) { try { d = await Account.season(); } catch (e) { this.toast(e.message, 'bad'); return; } }
+    $('#se-off').style.display = d.enabled ? 'none' : ''; $('#se-main').style.display = d.enabled ? '' : 'none'; if (!d.enabled) return;
+    const left = Math.max(0, Math.ceil((d.season.endsAt - Date.now()) / 86400000)), pts = d.me.points;
+    $('#se-name').textContent = d.season.name; $('#se-left').textContent = left <= 1 ? 'endet heute' : 'noch ' + left + ' Tage'; $('#se-pts').textContent = pts;
+    $('#se-pos').textContent = d.me.position ? 'Platz ' + d.me.position : 'noch nicht platziert';
+    const nextIdx = d.tiers.findIndex(t => t.points > pts), prev = nextIdx > 0 ? d.tiers[nextIdx - 1].points : 0;
+    $('#se-fill').style.width = nextIdx < 0 ? '100%' : (100 * (pts - prev) / (d.tiers[nextIdx].points - prev)) + '%';
+    $('#se-next').textContent = nextIdx < 0 ? 'Alle Belohnungen erreicht!' : 'Noch ' + (d.tiers[nextIdx].points - pts) + ' Punkte bis Stufe ' + (nextIdx + 1);
+    const tiers = $('#se-tiers'); tiers.replaceChildren();
+    d.tiers.forEach((t, i) => {
+      const done = d.me.claimed.includes(i), ready = !done && pts >= t.points, row = document.createElement('div'); row.className = 'se-tier' + (done ? ' done' : '') + (ready ? ' ready' : '');
+      const l = document.createElement('div'), b = document.createElement('b'), s = document.createElement('small'); b.textContent = 'Stufe ' + (i + 1) + ' · +' + t.coins + ' Münzen'; s.textContent = t.points + ' Punkte'; l.append(b, s); row.appendChild(l);
+      if (done) { const x = document.createElement('small'); x.textContent = '✓ abgeholt'; row.appendChild(x); }
+      else if (ready) { const btn = document.createElement('button'); btn.className = 'btn small'; btn.textContent = 'Abholen'; btn.onclick = async () => { btn.disabled = true; try { const r = await Account.claimSeason(i); audio.levelUp(); this.toast('+' + r.coins + ' Münzen!', 'good'); this.refreshProfile(); this.refreshSeason(r.season); } catch (e) { this.toast(e.message, 'bad'); btn.disabled = false; } }; row.appendChild(btn); }
+      else { const x = document.createElement('small'); x.textContent = '🔒'; row.appendChild(x); }
+      tiers.appendChild(row);
+    });
+    const board = $('#se-board'); board.replaceChildren(); $('#se-me-line').textContent = '';
+    if (!d.top.length) board.innerHTML = '<div class="empty">Noch niemand in der Rangliste. Spiele ein Match!</div>';
+    for (const r of d.top) {
+      const row = document.createElement('div'); row.className = 'se-row' + (r.name === Account.user.username ? ' me' : '') + (r.pos <= 3 ? ' top' + r.pos : '');
+      const p = document.createElement('span'), n = document.createElement('span'), lv = document.createElement('small'), s = document.createElement('span'); p.className = 'p'; p.textContent = '#' + r.pos; n.className = 'n'; n.textContent = r.name; lv.textContent = 'Lv ' + r.level; s.className = 's'; s.textContent = r.points;
+      row.append(p, n, lv, s); board.appendChild(row);
+    }
+    if (d.me.position > 25) $('#se-me-line').textContent = '(du: Platz ' + d.me.position + ')';
+  }
 
   // ---------- Freunde ----------
   openFriends() {
@@ -179,7 +232,7 @@ export class UI {
   }
   showReward(m, old) {
     const s = Account.user.stats, box = $('#res-xp'); if (!box) return;
-    box.innerHTML = `<div class="big">+${m.xp} XP</div><div class="lvl">Level ${s.level}${s.level > old.level ? ' – LEVEL UP!' : ''} · Rang ${s.rank}${m.rankDelta ? ' (' + (m.rankDelta > 0 ? '+' : '') + m.rankDelta + ' RP)' : ''} · +${m.coins} Münzen</div><div class="xb"><i style="width:${100 * s.xpInto / s.xpNeed}%"></i></div>`;
+    box.innerHTML = `<div class="big">+${m.xp} XP</div><div class="lvl">Level ${s.level}${s.level > old.level ? ' – LEVEL UP!' : ''} · Rang ${s.rank}${m.rankDelta ? ' (' + (m.rankDelta > 0 ? '+' : '') + m.rankDelta + ' RP)' : ''} · +${m.coins} Münzen</div><div class="xb"><i style="width:${100 * s.xpInto / s.xpNeed}%"></i></div>${m.seasonPoints ? `<div class="lvl">+${m.seasonPoints} Saisonpunkte (gesamt ${m.seasonTotal})</div>` : ''}`;
     if (s.level > old.level) { this.levelUp(s.level); audio.levelUp(); }
   }
   // ---------- Solo / Training ----------

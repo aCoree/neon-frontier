@@ -2,10 +2,10 @@
 import crypto from 'node:crypto';
 import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK } from './auth.js';
 import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
-import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS } from '../../client/js/shared/defs.js';
+import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
-export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, maintenance: false };
+export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, maintenance: false };
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
@@ -167,6 +167,35 @@ export class Api {
     if (out.error) return this.send(res, out.code, { error: out.error });
     this.send(res, 200, { reward: out, inventory: await this.inventory(user) });
   }
+  // ---------- Seasons ----------
+  async season(user) {
+    const s = seasonOf(), me = await this.db.one('SELECT points, matches, wins, kills FROM season_stats WHERE season_id=$1 AND user_id=$2', [s.id, user.id]);
+    const pts = me ? me.points : 0;
+    const claimed = (await this.db.all('SELECT tier FROM season_claims WHERE season_id=$1 AND user_id=$2', [s.id, user.id])).map(r => r.tier);
+    const top = await this.db.all(`SELECT u.username, ss.points, ss.wins, st.level FROM season_stats ss JOIN users u ON u.id=ss.user_id JOIN user_stats st ON st.user_id=u.id
+      WHERE ss.season_id=$1 AND ss.points>0 AND NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now()) ORDER BY ss.points DESC, ss.updated_at ASC LIMIT 25`, [s.id]);
+    const pos = pts > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM season_stats WHERE season_id=$1 AND points > $2', [s.id, pts])).n) + 1 : null;
+    return { enabled: !!this.flags.seasons, season: { id: s.id, name: s.name, endsAt: s.endsAt }, tiers: SEASON_TIERS,
+      me: { points: pts, matches: me ? me.matches : 0, wins: me ? me.wins : 0, kills: me ? me.kills : 0, claimed, position: pos },
+      top: top.map((r, i) => ({ pos: i + 1, name: r.username, points: r.points, wins: r.wins, level: r.level })) };
+  }
+  async claimSeason(req, res, user) {
+    if (!this.flags.seasons) return this.send(res, 503, { error: 'Seasons sind gerade deaktiviert.' });
+    if (this.rl.hit('seasonclaim:' + user.id, 20, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
+    const b = await this.body(req), idx = b.tier, tier = Number.isInteger(idx) ? SEASON_TIERS[idx] : null; if (!tier) return this.send(res, 400, { error: 'Unbekannte Stufe.' });
+    const s = seasonOf();
+    const out = await this.db.tx(async (t) => {
+      await t.query('SELECT 1 FROM user_stats WHERE user_id=$1 FOR UPDATE', [user.id]);   // Sperre: parallele Abholungen laufen nacheinander
+      const me = (await t.query('SELECT points FROM season_stats WHERE season_id=$1 AND user_id=$2', [s.id, user.id])).rows[0];
+      if (!me || me.points < tier.points) return { code: 403, error: `Dafür brauchst du ${tier.points} Saisonpunkte.` };
+      const ins = await t.query('INSERT INTO season_claims (season_id, user_id, tier, coins) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING 1', [s.id, user.id, idx, tier.coins]);
+      if (!ins.rows.length) return { code: 409, error: 'Diese Belohnung hast du schon abgeholt.' };
+      await t.query('UPDATE user_stats SET currency = currency + $2 WHERE user_id=$1', [user.id, tier.coins]);
+      return { ok: true, coins: tier.coins };
+    });
+    if (out.error) return this.send(res, out.code, { error: out.error });
+    this.send(res, 200, { coins: out.coins, season: await this.season(user) });
+  }
   async createSession(userId, req) {
     const token = newToken();
     await this.db.query('INSERT INTO sessions (token_hash, user_id, expires_at, user_agent) VALUES ($1,$2, now() + ($3 || \' days\')::interval, $4)', [hashToken(token), userId, String(SESSION_DAYS), clip(req.headers['user-agent'], 120)]);
@@ -181,7 +210,7 @@ export class Api {
     try {
       const ip = this.ip(req);
       if (this.rl.hit('api:' + ip, 240, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' }), true;
-      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop } }), true;
+      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop, friends: this.flags.friends, seasons: this.flags.seasons } }), true;
       if (!this.db || !this.flags.accounts) return this.send(res, 503, { error: 'Konten sind auf diesem Server nicht aktiviert.' }), true;
       const m = req.method;
       if (m === 'POST' && url === '/api/register') return await this.register(req, res, ip), true;
@@ -201,6 +230,8 @@ export class Api {
       if (m === 'GET' && url === '/api/inventory') return this.send(res, 200, await this.inventory(user)), true;
       if (m === 'POST' && url === '/api/shop/buy') return await this.buy(req, res, user), true;
       if (m === 'POST' && url === '/api/equip') return await this.equip(req, res, user), true;
+      if (m === 'GET' && url === '/api/season') return this.send(res, 200, await this.season(user)), true;
+      if (m === 'POST' && url === '/api/season/claim') return await this.claimSeason(req, res, user), true;
       if (m === 'POST' && url === '/api/daily/claim') return await this.claimDaily(res, user), true;
       if (m === 'POST' && url === '/api/report') return await this.report(req, res, user), true;
       if (m === 'POST' && (url === '/api/mute' || url === '/api/unmute')) return await this.mute(req, res, user, url === '/api/mute'), true;

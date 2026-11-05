@@ -32,6 +32,7 @@
       <button class="mbtn" data-act="private"><i>⚿</i><span>Private Lobby<small>Raum + Einladungslink</small></span></button>
       <button class="mbtn" data-act="training"><i>◎</i><span>Training<small>Schießstand &amp; alle Waffen</small></span></button>
       <button class="mbtn" data-go="skins"><i>✦</i><span>Skins<small>Charaktere &amp; Waffen</small></span></button>
+      <button class="mbtn" data-go="season"><i>♛</i><span>Season<small id="season-sub">Rangliste &amp; Belohnungen</small></span></button>
       <button class="mbtn" data-go="friends"><i>☺</i><span>Freunde<small id="fr-count">Suchen &amp; einladen</small></span></button>
       <button class="mbtn" data-go="ach"><i>★</i><span>Erfolge<small id="ach-count">0 / 14</small></span></button>
       <button class="mbtn" data-go="settings"><i>⚙</i><span>Einstellungen<small>Grafik, Audio, Steuerung</small></span></button>
@@ -89,6 +90,29 @@
       <div>
         <h4>Meine Freunde <small id="fr-total"></small></h4>
         <div class="rooms" id="fr-list" style="max-height:60vh"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SEASON ================= -->
+<section id="s-season" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Season</h2></header>
+    <div id="se-guest" class="empty" style="display:none">Melde dich mit einem Konto an, um Saisonpunkte zu sammeln. <button class="link" id="se-login">Anmelden</button></div>
+    <div id="se-off" class="empty" style="display:none">Seasons sind auf diesem Server gerade deaktiviert.</div>
+    <div class="grid2" id="se-main">
+      <div>
+        <div class="se-head"><b id="se-name">Saison</b><small id="se-left"></small></div>
+        <div class="se-pts"><span id="se-pts">0</span><small>Saisonpunkte</small><small id="se-pos"></small></div>
+        <div class="xb se-bar"><i id="se-fill" style="width:0%"></i></div><small id="se-next" class="se-hint"></small>
+        <h4>Belohnungen</h4>
+        <div class="rooms se-tiers" id="se-tiers"></div>
+        <small class="se-hint">Punkte: Ranglisten-Matches mit mind. 2 Spielern zählen voll, Matches gegen Bots nur zu 25 %. Eine neue Saison beginnt jeden Monat bei 0.</small>
+      </div>
+      <div>
+        <h4>Top 25 <small id="se-me-line"></small></h4>
+        <div class="rooms se-board" id="se-board" style="max-height:62vh"></div>
       </div>
     </div>
   </div>
@@ -228,7 +252,7 @@
       <table>
         <tr><td>W A S D</td><td>Bewegen</td></tr><tr><td>Maus</td><td>Umsehen</td></tr><tr><td>Linke Maustaste</td><td>Schießen</td></tr><tr><td>Rechte Maustaste</td><td>Zielen (Visier / Zoom)</td></tr>
         <tr><td>Shift</td><td>Sprinten</td></tr><tr><td>Leertaste</td><td>Springen (2× = Doppelsprung, mit Jetpack halten)</td></tr><tr><td>C / Strg</td><td>Ducken</td></tr><tr><td>Q</td><td>Dash / Ausweichen</td></tr>
-        <tr><td>R</td><td>Nachladen</td></tr><tr><td>1–5 / Mausrad</td><td>Waffe wechseln</td></tr><tr><td>E</td><td>Interagieren (Kisten, Schalter, Geheimnisse)</td></tr>
+        <tr><td>R</td><td>Nachladen</td></tr><tr><td>B (halten) + 1–8</td><td>Emote (Sprechblase über dem Kopf)</td></tr><tr><td>1–5 / Mausrad</td><td>Waffe wechseln</td></tr><tr><td>E</td><td>Interagieren (Kisten, Schalter, Geheimnisse)</td></tr>
       </table>
       <table>
         <tr><td>Z</td><td>Medkit (+55 Leben)</td></tr><tr><td>X</td><td>Schildtrank (+50 Schild)</td></tr><tr><td>G</td><td>Splittergranate werfen</td></tr><tr><td>H</td><td>Rauchbombe werfen</td></tr>
@@ -248,6 +272,7 @@
   <div class="h-mini"><canvas id="minimap" width="360" height="360"></canvas><div id="h-zone"></div></div>
   <div class="h-feed" id="feed"></div>
   <div class="h-chat" id="chatlog"></div>
+  <div id="emote-wheel" aria-hidden="true"><div class="ew-hint">Emote: Taste <b>B</b> halten + Zahl</div></div>
   <input id="chat-in" maxlength="120" placeholder="Nachricht …" autocomplete="off">
   <div class="h-cross" id="cross"><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i><i class="d"></i><div class="hm" id="hitmarker"></div></div>
   <div class="scope" id="scope"></div>

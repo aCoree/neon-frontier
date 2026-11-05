@@ -1,5 +1,5 @@
 // Server-autoritative Fortschrittsberechnung: XP, Level, Rang. Der Client darf nichts davon selbst festlegen.
-import { xpForLevel, CATALOG, DEFAULT_ITEMS } from '../../client/js/shared/defs.js';
+import { xpForLevel, CATALOG, DEFAULT_ITEMS, seasonOf } from '../../client/js/shared/defs.js';
 
 export const RANKS = [
   { name: 'Bronze', min: 0 }, { name: 'Silver', min: 100 }, { name: 'Gold', min: 250 },
@@ -17,6 +17,9 @@ export function reward(stat) {
   if (stat.ranked && stat.humans >= 2) rankDelta = stat.won ? Math.min(40, 25 + Math.floor(stat.kills / 2)) : -Math.max(0, 15 - Math.floor(stat.kills / 3));
   return { xp, rankDelta };
 }
+
+// Saisonpunkte: volle Punkte nur für Ranglisten-Matches mit mind. 2 Menschen, sonst 25 % (Bot-Farming lohnt kaum).
+export function seasonPoints(stat, xp) { if (!xp) return 0; const full = stat.ranked && stat.humans >= 2; return Math.max(1, Math.floor(xp / 10 * (full ? 1 : 0.25))); }
 
 // Gewährt alle Cosmetics, deren Level erreicht ist (idempotent, kann beliebig oft aufgerufen werden).
 export async function grantUnlocks(q, userId, level) {
@@ -37,6 +40,14 @@ export async function applyMatchResult(db, userId, matchId, stat) {
       rank_points=$8, best_rank_points=GREATEST(best_rank_points,$8), currency=currency+$9 WHERE user_id=$1`,
       [userId, xp, lv.level, stat.kills, stat.deaths, stat.hs, stat.won ? 1 : 0, rp, coins]);
     await grantUnlocks(t, userId, lv.level);
-    return { xp: r.xp, rankDelta: r.rankDelta, totalXp: xp, level: lv.level, into: lv.into, need: lv.need, rankPoints: rp, rank: rankOf(rp), coins };
+    const sp = seasonPoints(stat, r.xp), season = seasonOf();
+    let seasonTotal = 0;
+    if (sp > 0) {
+      const ss = (await t.query(`INSERT INTO season_stats (season_id, user_id, points, matches, wins, kills) VALUES ($1,$2,$3,1,$4,$5)
+        ON CONFLICT (season_id, user_id) DO UPDATE SET points = season_stats.points + $3, matches = season_stats.matches + 1, wins = season_stats.wins + $4, kills = season_stats.kills + $5, updated_at = now() RETURNING points`,
+        [season.id, userId, sp, stat.won ? 1 : 0, stat.kills])).rows[0];
+      seasonTotal = ss.points;
+    }
+    return { seasonPoints: sp, seasonTotal, xp: r.xp, rankDelta: r.rankDelta, totalXp: xp, level: lv.level, into: lv.into, need: lv.need, rankPoints: rp, rank: rankOf(rp), coins };
   });
 }

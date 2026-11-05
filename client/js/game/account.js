@@ -34,6 +34,8 @@ export const Account = {
   friends() { return this.req('GET', '/api/friends'); },
   search(q, after) { return this.req('GET', '/api/players/search?q=' + encodeURIComponent(q) + (after ? '&after=' + encodeURIComponent(after) : '')); },
   friendAction(kind, target) { return this.req('POST', '/api/friends/' + kind, { target }); },
+  season() { return this.req('GET', '/api/season'); },
+  async claimSeason(tier) { const r = await this.req('POST', '/api/season/claim', { tier }); await this.refresh(); return r; },
   async refresh() { if (!this.token) return; try { const m = await this.req('GET', '/api/me'); this.user = m.user; } catch { /* ignorieren */ } },
   report(target, reason, matchId) { return this.req('POST', '/api/report', { target, reason, matchId }); },
   async mute(target, on) { await this.req('POST', on ? '/api/mute' : '/api/unmute', { target }); on ? this.mutes.add(target) : this.mutes.delete(target); },

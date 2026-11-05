@@ -111,6 +111,29 @@ const inj = await call('GET', '/api/players/search?q=%27%20OR%201%3D1%20--', nul
 for (let i = 0; i < 45; i++) await call('POST', '/api/friends/request', { target: 'Zed02' }, hana.token); assert.equal((await call('POST', '/api/friends/request', { target: 'Zed03' }, hana.token)).s, 429); ok('Rate-Limit für Freundschaftsanfragen');
 await call('POST', '/api/admin/flag', { key: 'friends', value: false }, ow.token); assert.equal((await call('GET', '/api/friends', null, fay.token)).s, 503); await call('POST', '/api/admin/flag', { key: 'friends', value: true }, ow.token); ok('Feature-Flag schaltet Freunde-System ab');
 
+console.log('Seasons');
+assert.equal((await call('GET', '/api/season')).s, 401); ok('Season-Daten nur mit Anmeldung');
+const sa = await reg('Seasona', 'Passw0rd!x', {}, '12.0.0.1'), sb = await reg('Seasonb', 'Passw0rd!x', {}, '12.0.0.2');
+const ss0 = await call('GET', '/api/season', null, sa.token); assert.equal(ss0.s, 200); assert.equal(ss0.me.points, 0); assert.equal(ss0.me.position, null); assert.equal(ss0.tiers.length, 8); assert.ok(ss0.season.name.startsWith('Saison ')); ok('Neue Saison: 0 Punkte, keine Platzierung, 8 Stufen');
+const sstat = (o) => ({ kills: 5, deaths: 1, hs: 2, dmg: 900, won: true, secs: 300, humans: 1, ranked: false, ...o });
+const sr1 = await applyMatchResult(db, sa.user.id, 'sm-casual', sstat()); assert.equal(sr1.seasonPoints, 15); ok('Gelegenheits-Match (Bots): nur 25 % Saisonpunkte');
+assert.equal(await applyMatchResult(db, sa.user.id, 'sm-casual', sstat()), null); assert.equal((await call('GET', '/api/season', null, sa.token)).me.points, 15); ok('Dasselbe Match zählt nie doppelt');
+const sr2 = await applyMatchResult(db, sa.user.id, 'sm-sr1', sstat({ humans: 2, ranked: true })); assert.equal(sr2.seasonPoints, 63); assert.equal(sr2.seasonTotal, 78); ok('Ranglisten-Match mit 2 Menschen: volle Punkte');
+const srs = await applyMatchResult(db, sa.user.id, 'sm-short', sstat({ secs: 10 })); assert.equal(srs.seasonPoints, 0); assert.equal((await call('GET', '/api/season', null, sa.token)).me.points, 78); ok('Abgebrochene Mini-Matches (<30 s) geben keine Saisonpunkte');
+assert.equal((await call('POST', '/api/season/claim', { tier: 0 }, sa.token)).s, 403); ok('Stufe ohne genug Punkte: 403');
+await applyMatchResult(db, sa.user.id, 'sm-sr2', sstat({ humans: 2, ranked: true }));
+const sbefore = Number((await db.one('SELECT currency FROM user_stats WHERE user_id=$1', [sa.user.id])).currency);
+const sc1 = await call('POST', '/api/season/claim', { tier: 0 }, sa.token); assert.equal(sc1.s, 200); assert.equal(sc1.coins, 50); assert.deepEqual(sc1.season.me.claimed, [0]);
+assert.equal(Number((await db.one('SELECT currency FROM user_stats WHERE user_id=$1', [sa.user.id])).currency), sbefore + 50); ok('Stufe abholen: +50 Münzen, Server merkt sich die Abholung');
+assert.equal((await call('POST', '/api/season/claim', { tier: 0 }, sa.token)).s, 409); ok('Doppelt abholen unmöglich (409)');
+for (const bad of [99, -1, 'x', 1.5, null]) assert.equal((await call('POST', '/api/season/claim', { tier: bad }, sa.token)).s, 400); ok('Ungültige Stufen abgewiesen');
+assert.equal((await call('POST', '/api/season/claim', { tier: 1 }, sa.token)).s, 403); ok('Höhere Stufe bleibt gesperrt');
+await applyMatchResult(db, sb.user.id, 'sm-b1', sstat({ humans: 2, ranked: true, kills: 3, won: true })); await applyMatchResult(db, sb.user.id, 'sm-b2', sstat({ humans: 2, ranked: true, kills: 3, won: true }));
+const spar = await Promise.all([0, 1, 2, 3, 4].map(() => call('POST', '/api/season/claim', { tier: 0 }, sb.token))); assert.equal(spar.filter(x => x.s === 200).length, 1); ok('5 gleichzeitige Abholungen → genau eine zahlt aus');
+const slb = await call('GET', '/api/season', null, sb.token); assert.equal(slb.top[0].name, 'Seasona'); assert.ok(slb.top[0].points >= slb.top[1].points); assert.equal(slb.me.position, 2); assert.ok(!('password_hash' in slb.top[0]) && !('id' in slb.top[0])); ok('Rangliste sortiert, eigene Platzierung, keine privaten Felder');
+await call('POST', '/api/admin/ban', { username: 'Seasona', minutes: 30, reason: 'Test' }, ow.token); assert.ok(!(await call('GET', '/api/season', null, sb.token)).top.some(x => x.name === 'Seasona')); await call('POST', '/api/admin/unban', { username: 'Seasona' }, ow.token); ok('Gesperrte Spieler verschwinden aus der Rangliste');
+await call('POST', '/api/admin/flag', { key: 'seasons', value: false }, ow.token); assert.equal((await call('POST', '/api/season/claim', { tier: 2 }, sb.token)).s, 503); await call('POST', '/api/admin/flag', { key: 'seasons', value: true }, ow.token); ok('Feature-Flag schaltet Seasons-Abholung ab');
+
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
 const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');

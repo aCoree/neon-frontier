@@ -147,3 +147,22 @@ export const CATALOG = [
 export const CATALOG_BY_ID = Object.fromEntries(CATALOG.map(i => [i.id, i]));
 export const DEFAULT_ITEMS = ['skin:vanguard', 'wskin:default'];
 export const DAILY_REWARDS = [{ coins: 50 }, { xp: 100 }, { coins: 75 }, { coins: 100 }, { xp: 200 }, { coins: 150 }, { coins: 300, item: true }];
+
+// ---- Seasons: Monats-Saisons, Punkte kommen ausschließlich vom Server (aus der Match-Belohnung) ----
+export const SEASON_TIERS = [
+  { points: 100, coins: 50 }, { points: 250, coins: 75 }, { points: 500, coins: 100 }, { points: 900, coins: 150 },
+  { points: 1400, coins: 200 }, { points: 2000, coins: 300 }, { points: 2800, coins: 400 }, { points: 3800, coins: 600 },
+];
+const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+// Saison = Kalendermonat (UTC). id z. B. 202611.
+export function seasonOf(date = new Date()) {
+  const y = date.getUTCFullYear(), mo = date.getUTCMonth();
+  return { id: y * 100 + mo + 1, name: `Saison ${MONTHS[mo]} ${y}`, startsAt: Date.UTC(y, mo, 1), endsAt: Date.UTC(y, mo + 1, 1) };
+}
+
+// ---- Emotes: der Server prüft ID und Abklingzeit, der Client zeigt nur die Sprechblase ----
+export const EMOTES = [
+  { id: 'gg', icon: 'GG', label: 'Gutes Spiel' }, { id: 'wave', icon: '👋', label: 'Winken' }, { id: 'thanks', icon: '🙏', label: 'Danke' }, { id: 'laugh', icon: '😂', label: 'Lachen' },
+  { id: 'fire', icon: '🔥', label: 'Heiß' }, { id: 'help', icon: '🆘', label: 'Hilfe!' }, { id: 'gl', icon: '🍀', label: 'Viel Glück' }, { id: 'cry', icon: '😢', label: 'Autsch' },
+];
+export const EMOTE_COOLDOWN = 2.5;   // Sekunden

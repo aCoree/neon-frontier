@@ -1,5 +1,5 @@
 // Autoritative Raum-Simulation: Lobby, Match, Treffer, Projektile, Pickups, Türen, Events. Läuft auf dem Node-Server UND (offline) im Browser.
-import { WEAPONS, THROWABLES, CONSUMABLES, POWERUPS, GADGETS, MODES, TEAMS, DIFFS, PLAYER, START_LOADOUT, NET, FL, LOOT, AMMO_GIVE } from '../defs.js';
+import { WEAPONS, THROWABLES, CONSUMABLES, POWERUPS, GADGETS, MODES, TEAMS, DIFFS, PLAYER, START_LOADOUT, NET, FL, LOOT, AMMO_GIVE, EMOTES, EMOTE_COOLDOWN } from '../defs.js';
 import { World, rayCylinder } from '../world.js';
 import { buildMap, moverY } from '../mapdata.js';
 import { spreadDirs, mulberry32, clamp, lerp } from '../util.js';
@@ -106,6 +106,12 @@ export class Room {
       case 'interact': return this.onInteract(m, e, msg);
       case 'gadget': return this.onGadget(m, e, msg);
       case 'dash': this.emit({ k: 'dash', id: e.id }); return;
+      case 'emote': {   // nur gültige IDs, nur lebende Spieler, feste Abklingzeit – alles serverseitig
+        const idx = EMOTES.findIndex(x => x.id === msg.id); if (idx < 0 || !e.alive) return;
+        if (this.hooks?.emotesAllowed && !this.hooks.emotesAllowed()) return;
+        const now = Date.now(); if (now < (m.emoteAt || 0)) return; m.emoteAt = now + EMOTE_COOLDOWN * 1000;
+        this.emit({ k: 'emote', id: e.id, e: idx }); return;
+      }
       case 'suicide': if (e.alive && !this.settings.training) this.damage(e, 9999, e, { w: 'fall' }); return;
     }
   }

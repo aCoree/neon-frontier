@@ -64,7 +64,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     const client = { send(o, raw) { if (ws.readyState === 1) { try { const d = raw ? o : JSON.stringify(o); M.bytesOut += d.length; ws.send(d); } catch { /* Verbindung weg */ } } }, close() { try { ws.close(); } catch { /* ignore */ } } };
     let room = null, member = null, profile = null, bucket = 120, lastRefill = Date.now(), chain = Promise.resolve();
 
-    const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
+    const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, emotesAllowed: () => api.flags.emotes, filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
     async function finishMatch(r, matchId, results) {
       if (!db) return;
       for (const x of results) {

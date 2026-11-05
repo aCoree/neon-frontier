@@ -125,6 +125,7 @@ export class Audio {
   }
   jump() { if (!this.ctx) return; this.noise(0.15, { type: 'bandpass', f: 500, f2: 1200, vol: 0.2 }); }
   land(v = 0.5) { if (!this.ctx) return; this.noise(0.12, { f: 600, vol: 0.5 * v }); this.tone(90, 0.1, { f2: 50, vol: 0.4 * v }); }
+  emote(pos) { if (!this.ctx) return; const d = this.out(pos, 0.6); if (!d) return; this.tone(660, 0.09, { vol: 0.14, type: 'triangle', dst: d }); this.tone(990, 0.12, { vol: 0.14, type: 'triangle', at: 0.07, dst: d }); }
   dash() { if (!this.ctx) return; this.noise(0.28, { type: 'bandpass', f: 400, f2: 3000, q: 0.8, vol: 0.55 }); }
   pickup(kind) {
     if (!this.ctx) return;

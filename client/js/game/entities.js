@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Character } from '../render/character.js';
 import { makeWeaponModel } from '../render/weapons.js';
-import { FL, WEAPONS, TEAMS, AMMO, CONSUMABLES, POWERUPS, GADGETS } from '../shared/defs.js';
+import { FL, WEAPONS, TEAMS, AMMO, CONSUMABLES, POWERUPS, GADGETS, EMOTES } from '../shared/defs.js';
 import { lerp, lerpAngle, angDiff } from '../shared/util.js';
 
 const DELAY = 0.11;
@@ -179,4 +179,38 @@ export class DroneView {
   }
   update(dt, t) { for (const d of this.map.values()) { d.g.position.x += (d.tx - d.g.position.x) * Math.min(1, dt * 10); d.g.position.y += (d.ty - d.g.position.y) * Math.min(1, dt * 10); d.g.position.z += (d.tz - d.g.position.z) * Math.min(1, dt * 10); d.g.userData.rot.rotation.y = t * 30; } }
   pos(id) { const d = this.map.get(id); return d ? d.g.position : null; }
+}
+
+// Emote-Sprechblasen über den Köpfen. Texturen werden pro Emote einmal gezeichnet und geteilt; höchstens eine Blase je Spieler.
+export class EmoteView {
+  constructor(scene) { this.scene = scene; this.items = new Map(); this.tex = new Map(); }
+  texFor(i) {
+    let t = this.tex.get(i); if (t) return t;
+    const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d'), em = EMOTES[i];
+    x.fillStyle = 'rgba(10,16,28,0.88)'; x.strokeStyle = '#7ee8ff'; x.lineWidth = 6; x.beginPath(); x.roundRect(8, 8, 112, 96, 22); x.fill(); x.stroke();
+    x.fillStyle = '#7ee8ff'; x.beginPath(); x.moveTo(52, 102); x.lineTo(64, 122); x.lineTo(76, 102); x.closePath(); x.fill();   // Zeiger
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    if (em.icon.length <= 2 && /^[A-Z]+$/.test(em.icon)) { x.font = '900 52px "Trebuchet MS", Arial, sans-serif'; x.fillStyle = '#ffffff'; x.fillText(em.icon, 64, 58); }
+    else { x.font = '56px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif'; x.fillText(em.icon, 64, 60); }
+    t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; this.tex.set(i, t); return t;
+  }
+  show(id, idx) {
+    if (!EMOTES[idx]) return; this.remove(id);
+    if (this.items.size >= 24) this.remove(this.items.keys().next().value);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texFor(idx), transparent: true, depthTest: false, depthWrite: false, fog: false }));
+    sp.renderOrder = 11; sp.visible = false; this.scene.add(sp); this.items.set(id, { sp, t: 0 });
+  }
+  remove(id) { const it = this.items.get(id); if (!it) return; this.scene.remove(it.sp); it.sp.material.dispose(); this.items.delete(id); }
+  clear() { for (const id of [...this.items.keys()]) this.remove(id); }
+  // getPos(id, outVec) → true, wenn der Spieler existiert und sichtbar ist
+  update(dt, getPos, camPos) {
+    const v = this._v || (this._v = new THREE.Vector3());
+    for (const [id, it] of this.items) {
+      it.t += dt; const LIFE = 2.8;
+      if (it.t > LIFE || !getPos(id, v)) { this.remove(id); continue; }
+      const pop = Math.min(1, it.t / 0.22), k = 1 + 2.2 * Math.pow(pop - 1, 3) + 1.2 * Math.pow(pop - 1, 2), fade = Math.min(1, (LIFE - it.t) / 0.5);
+      const d = camPos.distanceTo(v), s = THREE.MathUtils.clamp(d * 0.1, 0.9, 3.4) * 0.8 * Math.max(0.01, k);
+      it.sp.position.set(v.x, v.y + 2.95 + Math.sin(it.t * 4) * 0.04 + Math.min(it.t, 0.5) * 0.15, v.z); it.sp.scale.set(s, s, 1); it.sp.material.opacity = Math.max(0, fade); it.sp.visible = true;
+    }
+  }
 }
