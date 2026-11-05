@@ -29,6 +29,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     return out;
   }
   const sockets = new Map();   // userId -> Anzahl offener WebSocket-Verbindungen (angemeldet)
+  const social = new Map();    // userId -> Set(client): dauerhafte „Social“-Verbindung im Menü (Echtzeit-Hinweise, Einladungen)
+  const notify = (userId, msg) => { const s = social.get(Number(userId)); if (!s || !s.size) return false; for (const c of s) c.send(msg); return true; };
   const presence = (userId) => {
     const online = (sockets.get(userId) || 0) > 0; if (!online) return { online: false };
     for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.connected) return { online: true, room: r.state === 'lobby' ? r.code : null, inMatch: r.state !== 'lobby' };
@@ -37,9 +39,9 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   let api;
   const stats = new Analytics(db, { enabled: () => api.flags.analytics !== false, log, sample: (a) => { a.max('peak_players', '', playersOnline()); a.max('peak_rooms', '', rooms.size); } });
   api = new Api({
-    db, stats, config, log, presence, metrics: () => metricsSnapshot(),
+    db, stats, notify, config, log, presence, metrics: () => metricsSnapshot(),
     rooms: () => [...rooms.values()].map(r => ({ code: r.code, state: r.state, mode: r.settings.mode, players: r.humans().length, matchId: r.matchId })),
-    onBan: (userId, reason) => { for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
+    onBan: (userId, reason) => { for (const c of [...(social.get(userId) || [])]) { c.send({ k: 'err', code: 'banned', text: 'Dein Konto wurde gesperrt.' }); c.close(); } for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
   });
   const newCode = () => { for (let i = 0; i < 200; i++) { let c = ''; for (let k = 0; k < 4; k++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; if (!rooms.has(c)) return c; } return 'R' + Date.now().toString(36).slice(-3).toUpperCase(); };
 
@@ -95,8 +97,17 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
           if (db) { const clash = await db.one('SELECT 1 FROM users WHERE username_lower=$1', [name.toLowerCase()]); if (clash) name = name.slice(0, 11) + '_G' + Math.floor(Math.random() * 90 + 10); }
           profile = { name, skin: msg.skin, wskin: msg.wskin, level: Math.min(99, msg.level | 0) };
         }
+        if (msg.social) {   // reine Hinweis-Verbindung: nur für angemeldete Spieler, höchstens 5 pro Konto, kann keine Räume betreten
+          if (!acct) { client.send({ k: 'err', code: 'nosocial', text: 'Nicht angemeldet.' }); client.close(); return; }
+          const set = social.get(profile.userId) || new Set(); if (set.size >= 5) { client.send({ k: 'err', code: 'toomany', text: 'Zu viele Verbindungen.' }); client.close(); return; }
+          set.add(client); social.set(profile.userId, set); client.social = true; profile.social = true;
+        }
         if (acct && profile.userId && !client.counted) { client.counted = profile.userId; sockets.set(profile.userId, (sockets.get(profile.userId) || 0) + 1); }
         client.send({ k: 'welcome', v: 2, serverTime: Date.now(), account: !!acct, name: profile.name, role: acct ? acct.role : 'GUEST' }); return;
+      }
+      if (client.social) {   // Social-Verbindungen dürfen nur einladen
+        if (msg.k === 'invite') await handleInvite(msg);
+        return;
       }
       if (msg.k === 'create') {
         if (!profile) return; if (room) leave();
@@ -121,6 +132,21 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       if (msg.k === 'refreshmutes') { loadMutes(); return; }
       if (room && member) room.handle(member, msg);
     }
+    // Einladung in die eigene Lobby: nur an akzeptierte Freunde, nur wenn sie online sind, begrenzte Rate
+    async function handleInvite(msg) {
+      const target = String(msg.target || '').slice(0, 16), reply = (ok, error) => client.send({ k: 'invite_result', ok, target, error });
+      if (!api.flags.friends) return reply(false, 'Das Freunde-System ist gerade deaktiviert.');
+      if (api.rl.hit('invite:' + profile.userId, 30, 60000)) return reply(false, 'Zu viele Einladungen. Bitte kurz warten.');
+      const t = await api.friendByName(profile.userId, target); if (!t) return reply(false, 'Du kannst nur Freunde einladen.');
+      let rm = null; for (const r of rooms.values()) if (r.state === 'lobby') for (const m of r.members.values()) if (m.userId === profile.userId && m.connected) rm = r;
+      if (!rm) return reply(false, 'Du bist in keiner Lobby.');
+      if ([...rm.members.values()].some(m => m.userId === Number(t.id) && m.connected)) return reply(false, t.username + ' ist schon in deiner Lobby.');
+      if (rm.humans().length >= 12) return reply(false, 'Die Lobby ist voll.');
+      if (api.rl.hit(`invite:${profile.userId}:${t.id}`, 3, 60000)) return reply(false, 'Du hast ' + t.username + ' gerade erst eingeladen.');
+      if (!social.get(Number(t.id))?.size) return reply(false, t.username + ' ist gerade offline.');
+      await api.push(Number(t.id), { id: profile.userId }, { k: 'invite', from: profile.name, code: rm.code, mode: rm.settings.mode, players: rm.humans().length });   // stumm geschaltet = still verworfen
+      stats.inc('invite'); reply(true);
+    }
     function loadMutes() { const m = member; if (m && m.userId) api.mutedBy(m.userId).then(s => { m.muted = s; }).catch(() => {}); }
 
     ws.on('message', (data) => {
@@ -132,7 +158,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       chain = chain.then(() => onMessage(msg)).catch((e) => { M.errors++; log.error('Fehler bei Nachricht', msg.k, e); });  // Nachrichten pro Verbindung strikt nacheinander
     });
     function leave() { if (room && member) { try { room.removeMember(member, true); } catch (e) { log.error(e); } } room = null; member = null; }
-    ws.on('close', () => { if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
+    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) social.delete(profile.userId); } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
     ws.on('error', () => {});
   });
 

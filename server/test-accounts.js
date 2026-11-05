@@ -151,6 +151,31 @@ const bk = await fetch(base + '/api/admin/backup', { headers: { Authorization: '
 const bkBuf = Buffer.from(await bk.arrayBuffer()); const rbk = readBackup(bkBuf, 'test-passphrase-123456'); assert.ok(rbk.head.tables.users >= 10 && rbk.head.tables.sessions === undefined); assert.throws(() => readBackup(bkBuf, 'falsch-falsch-falsch'), /Passphrase/); ok('Besitzer lädt ein verschlüsseltes, prüfbares Backup herunter (ohne Sitzungen)');
 assert.ok((await call('GET', '/api/admin/audit', null, ow.token)).logs.some(x => x.action === 'backup_download')); ok('Backup-Download steht im Audit-Log');
 
+console.log('Echtzeit-Hinweise & Lobby-Einladungen');
+const q_openSocial = (token) => new Promise((resolve) => { const ws = new WebSocket('ws://localhost:' + port), q_got = []; const h = { ws, got: q_got, wait: (k, ms = 1500) => new Promise((res) => { const t0 = Date.now(), iv = setInterval(() => { const m = q_got.find(x => x.k === k && !x._seen); if (m) { m._seen = true; clearInterval(iv); res(m); } else if (Date.now() - t0 > ms) { clearInterval(iv); res(null); } }, 20); }) };
+  ws.on('open', () => ws.send(JSON.stringify({ k: 'hello', token, social: true }))); ws.on('message', (d) => { const m = JSON.parse(d); q_got.push(m); if (m.k === 'welcome' || m.k === 'err') resolve(h); }); ws.on('close', () => { h.closed = true; }); });
+const q_nap = (ms) => new Promise(r => setTimeout(r, ms));
+const q_gs = await q_openSocial(null); assert.equal(q_gs.got[0].code, 'nosocial'); await q_nap(100); assert.ok(q_gs.closed); ok('Gäste bekommen keine Social-Verbindung');
+const q_pa = await reg('Pusha', 'Passw0rd!x', {}, '14.0.0.1'), q_pb = await reg('Pushb', 'Passw0rd!x', {}, '14.0.0.2'), q_pc = await reg('Pushc', 'Passw0rd!x', {}, '14.0.0.3'), q_pd = await reg('Pushd', 'Passw0rd!x', {}, '14.0.0.4');
+const q_sa = await q_openSocial(q_pa.token), q_sb = await q_openSocial(q_pb.token); assert.equal(q_sa.got[0].k, 'welcome');
+assert.equal((await call('POST', '/api/friends/request', { target: 'Pushb' }, q_pa.token)).s, 200); const q_fr = await q_sb.wait('friend_request'); assert.ok(q_fr && q_fr.from === 'Pusha' && q_fr.level >= 1); ok('Freundschaftsanfrage kommt in Echtzeit beim Empfänger an');
+assert.equal((await call('POST', '/api/friends/accept', { target: 'Pusha' }, q_pb.token)).s, 200); const q_fa = await q_sa.wait('friend_accepted'); assert.ok(q_fa && q_fa.from === 'Pushb'); ok('Annahme kommt in Echtzeit beim Absender an');
+assert.equal((await call('GET', '/api/friends', null, q_pa.token)).friends.find(x => x.username === 'Pushb').online, true); ok('Social-Verbindung zählt als „online“ für Freunde');
+await call('POST', '/api/mute', { target: 'Pushd' }, q_pc.token); const q_sc = await q_openSocial(q_pc.token); await call('POST', '/api/friends/request', { target: 'Pushc' }, q_pd.token); assert.equal(await q_sc.wait('friend_request', 400), null); ok('Stummgeschaltete Spieler lösen keine Hinweise aus');
+// Einladungen
+const q_sendInv = async (sock, target) => { sock.ws.send(JSON.stringify({ k: 'invite', target })); return sock.wait('invite_result'); };
+assert.equal((await q_sendInv(q_sa, 'Pushb')).error, 'Du bist in keiner Lobby.'); ok('Ohne Lobby keine Einladung');
+const q_roomA = await wsHello({ token: q_pa.token }); q_roomA.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa', bots: 1 } })); await q_nap(300);
+const q_inv = await q_sendInv(q_sa, 'Pushb'); assert.equal(q_inv.ok, true); const q_got = await q_sb.wait('invite'); assert.ok(q_got && q_got.from === 'Pusha' && /^[A-Z]{4}$/.test(q_got.code) && q_got.mode === 'ffa'); ok('Einladung in die Lobby erreicht den Freund in Echtzeit (mit Raumcode)');
+assert.equal((await q_sendInv(q_sa, 'Pushb')).ok, true); assert.equal((await q_sendInv(q_sa, 'Pushb')).ok, true); const q_blocked = await q_sendInv(q_sa, 'Pushb'); assert.equal(q_blocked.ok, false); ok('Wiederholte Einladung an dieselbe Person wird begrenzt');
+assert.equal((await q_sendInv(q_sa, 'Pushc')).error, 'Du kannst nur Freunde einladen.'); assert.equal((await q_sendInv(q_sa, 'Aurelio')).ok, false); assert.equal((await q_sendInv(q_sa, 'x'.repeat(40))).ok, false); ok('Nur Freunde lassen sich einladen (Fremde, Besitzer, Unsinn abgewiesen)');
+await call('POST', '/api/friends/request', { target: 'Pusha' }, q_pc.token); await call('POST', '/api/friends/accept', { target: 'Pushc' }, q_pa.token); q_sc.ws.close(); await q_nap(200);
+assert.equal((await q_sendInv(q_sa, 'Pushc')).error, 'Pushc ist gerade offline.'); ok('Offline-Freunde: klare Rückmeldung statt Einladung ins Leere');
+const q_before = app.rooms.size; q_sb.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa' } })); q_sb.ws.send(JSON.stringify({ k: 'join', code: q_got.code })); await q_nap(300); assert.equal(app.rooms.size, q_before); assert.equal([...app.rooms.values()].find(r => r.code === q_got.code).humans().length, 1); ok('Social-Verbindung kann keine Räume erstellen oder betreten');
+const q_many = []; for (let i = 0; i < 6; i++) q_many.push(await q_openSocial(q_pd.token)); assert.equal(q_many.filter(x => x.got[0].code === 'toomany').length, 1); q_many.forEach(x => x.ws.close()); ok('Höchstens 5 Social-Verbindungen pro Konto');
+q_roomA.ws.close(); await call('POST', '/api/admin/ban', { username: 'Pushb', minutes: 5, reason: 'Test' }, ow.token); await q_nap(300); assert.ok(q_sb.closed && q_sb.got.some(x => x.code === 'banned')); ok('Bann beendet auch die Social-Verbindung');
+q_sa.ws.close();
+
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
 const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');

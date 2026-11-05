@@ -10,8 +10,8 @@ export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes:
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
-  constructor({ db, stats = null, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, presence = () => ({ online: false }), log = console }) {
-    this.presence = presence; this.db = db; this.stats = stats || { inc() {}, max() {}, report: async () => ({ days: [], metrics: {} }) }; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
+  constructor({ db, stats = null, notify = () => false, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, presence = () => ({ online: false }), log = console }) {
+    this.presence = presence; this.notify = notify; this.db = db; this.stats = stats || { inc() {}, max() {}, report: async () => ({ days: [], metrics: {} }) }; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
     this.rl = new RateLimiter(); this.flags = { ...DEFAULT_FLAGS };
   }
   async init() {
@@ -58,6 +58,16 @@ export class Api {
     const rank = rankOf(s.rank_points), next = RANKS.find(r => r.min > s.rank_points);
     return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, bestRank: rankOf(s.best_rank_points), nextRankAt: next ? next.min : null, currency: Number(s.currency) } };
   }
+  // Gibt den Freund zurück (nur bei akzeptierter Freundschaft), sonst null – Grundlage für Einladungen
+  async friendByName(userId, name) {
+    const n = clip(name, 16).toLowerCase(); if (!n) return null;
+    return this.db.one(`SELECT u.id, u.username FROM users u JOIN friendships f ON f.status='accepted' AND ((f.requester=$1 AND f.addressee=u.id) OR (f.addressee=$1 AND f.requester=u.id))
+      WHERE u.username_lower=$2 AND NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now())`, [userId, n]);
+  }
+  // Echtzeit-Hinweis an alle Verbindungen des Spielers – aber nicht, wenn er den Absender stummgeschaltet hat
+  async push(targetId, fromUser, msg) {
+    try { if ((await this.mutedBy(targetId)).has(String(fromUser.id))) return false; return !!this.notify(targetId, msg); } catch { return false; }
+  }
   // ---------- Freunde & Spielersuche ----------
   async friendsRoute(req, res, url, user) {
     if (!this.flags.friends) return this.send(res, 503, { error: 'Das Freunde-System ist gerade deaktiviert.' });
@@ -94,16 +104,17 @@ export class Api {
     if (path === '/api/friends/request') {
       if (row && row.status === 'accepted') return this.send(res, 409, { error: 'Ihr seid schon befreundet.' });
       if (row && mine) return this.send(res, 409, { error: 'Anfrage wurde schon gesendet.' });
-      if (row && !mine) { await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); return this.send(res, 200, { ok: true, accepted: true }); }   // beide wollten → sofort Freunde
+      if (row && !mine) { await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); this.push(t.id, user, { k: 'friend_accepted', from: user.username }); return this.send(res, 200, { ok: true, accepted: true }); }   // beide wollten → sofort Freunde
       const n = await this.db.one("SELECT (SELECT count(*) FROM friendships WHERE requester=$1 AND status='pending')::int AS pend, (SELECT count(*) FROM friendships WHERE (requester=$1 OR addressee=$1) AND status='accepted')::int AS fr", [uid]);
       if (n.pend >= 30) return this.send(res, 400, { error: 'Zu viele offene Anfragen (max. 30).' }); if (n.fr >= 100) return this.send(res, 400, { error: 'Deine Freundesliste ist voll (max. 100).' });
       try { await this.db.query('INSERT INTO friendships (requester, addressee) VALUES ($1,$2)', [uid, t.id]); } catch (e) { if (e.code === '23505' || /unique|duplicate/i.test(e.message)) return this.send(res, 409, { error: 'Anfrage existiert schon.' }); throw e; }
+      const lv = await this.db.one('SELECT level FROM user_stats WHERE user_id=$1', [uid]); this.push(t.id, user, { k: 'friend_request', from: user.username, level: lv ? lv.level : 1 });
       return this.send(res, 200, { ok: true });
     }
     if (path === '/api/friends/accept') {
       if (!row || row.status !== 'pending' || mine) return this.send(res, 404, { error: 'Keine offene Anfrage von diesem Spieler.' });
       const n = await this.db.one("SELECT count(*)::int AS fr FROM friendships WHERE (requester=$1 OR addressee=$1) AND status='accepted'", [uid]); if (n.fr >= 100) return this.send(res, 400, { error: 'Deine Freundesliste ist voll (max. 100).' });
-      await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); return this.send(res, 200, { ok: true });
+      await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); this.push(t.id, user, { k: 'friend_accepted', from: user.username }); return this.send(res, 200, { ok: true });
     }
     if (path === '/api/friends/decline' || path === '/api/friends/remove') {   // Ablehnen, Anfrage zurückziehen, Freund entfernen
       if (!row) return this.send(res, 404, { error: 'Keine Verbindung zu diesem Spieler.' });

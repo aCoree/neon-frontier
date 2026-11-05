@@ -174,6 +174,7 @@
       <div class="lobby-col">
         <h4>Spieler <small id="lobby-count"></small></h4>
         <div id="lobby-teams"></div>
+        <div id="lobby-invite" style="display:none"><h4>Freunde einladen <small id="lobby-invite-n"></small></h4><div class="rooms" id="lobby-friends" style="max-height:170px"></div></div>
         <div class="row"><button class="btn small" id="lobby-shuffle">Teams automatisch zuteilen</button></div>
         <h4>Chat</h4>
         <div class="chatbox" id="lobby-chat"></div>
@@ -317,6 +318,10 @@
 <div id="clickhint" class="overlay clear"><div class="clickhint">Klicke ins Spiel, um die Maus zu steuern<br><small>Esc = Pause</small></div></div>
 <div id="conn"></div>
 <div id="toasts"></div>
+<div id="notifs" aria-live="polite"></div>
+<div id="dlg" class="dlg" aria-hidden="true"><div class="dlg-box" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+  <h3 id="dlg-title"></h3><div id="dlg-body"></div><input id="dlg-input" autocomplete="off" spellcheck="false"><div class="dlg-err" id="dlg-err"></div>
+  <div class="dlg-row"><button class="btn" id="dlg-cancel">Abbrechen</button><button class="btn primary" id="dlg-ok">OK</button></div></div></div>
 <div id="lvlup"></div>
 <div id="achv-pop"></div>
 <div id="portrait-warn">Bitte Gerät drehen – NEON FRONTIER braucht Tastatur &amp; Maus (Desktop-Browser).</div>

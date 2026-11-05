@@ -7,6 +7,7 @@ import { Minimap } from './minimap.js';
 import { SERVER_URL } from '../config.js';
 import { resolveServerUrl } from '../game/net.js';
 import { Account } from '../game/account.js';
+import { Social } from '../game/social.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -18,7 +19,7 @@ export class UI {
     this.hud = new Hud(this, game); this.deadTimer = null; this.lastLobby = null; this.myId = null; this.chatOpen = false;
   }
   init() {
-    const g = this.g;
+    const g = this.g; this.wireSocial();
     // Navigation
     $$('[data-go]').forEach(b => b.addEventListener('click', () => { audio.click(); this.go(b.dataset.go); }));
     $$('[data-back]').forEach(b => b.addEventListener('click', () => { audio.back(); this.back(); }));
@@ -122,6 +123,80 @@ export class UI {
   }
   ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
 
+  // ---------- Eigene Dialoge (statt confirm()/prompt() des Browsers) ----------
+  // dialog({ title, lines:[…], ok, cancel (null = ohne Abbrechen), danger, input:{ placeholder, min, max, value } }) → Promise<true|false|string|null>
+  dialog(o) {
+    this._dq = (this._dq || Promise.resolve()).then(() => new Promise((resolve) => {
+      const dlg = $('#dlg'), box = dlg.firstElementChild, ok = $('#dlg-ok'), cancel = $('#dlg-cancel'), inp = $('#dlg-input'), err = $('#dlg-err'), body = $('#dlg-body'), prev = document.activeElement;
+      $('#dlg-title').textContent = o.title || ''; body.replaceChildren(); for (const l of o.lines || []) { const p = document.createElement('p'); if (typeof l === 'string') p.textContent = l; else { p.className = l.cls || ''; p.textContent = l.text; } body.appendChild(p); }
+      box.classList.toggle('danger', !!o.danger); ok.textContent = o.ok || 'OK'; ok.classList.toggle('danger', !!o.danger); cancel.textContent = o.cancel || 'Abbrechen'; cancel.style.display = o.cancel === null ? 'none' : '';
+      err.textContent = ''; const I = o.input; inp.style.display = I ? 'block' : 'none'; inp.value = I?.value || ''; inp.placeholder = I?.placeholder || ''; inp.maxLength = I?.max || 200;
+      const was = this.g.input?.enabled; if (this.g.input) this.g.input.enabled = false;
+      const done = (v) => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden', 'true'); dlg.removeEventListener('keydown', key); ok.onclick = cancel.onclick = dlg.onmousedown = null; if (this.g.input && was) this.g.input.enabled = was; try { prev && prev.focus && prev.focus(); } catch { /* egal */ } resolve(v); };
+      const submit = () => { if (I) { const v = inp.value.trim(); if (v.length < (I.min || 0)) { err.textContent = 'Bitte mindestens ' + I.min + ' Zeichen eingeben.'; inp.focus(); return; } done(v); } else done(true); };
+      const key = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(I ? null : false); } else if (e.key === 'Enter' && e.target !== cancel) { e.preventDefault(); submit(); } else if (e.key === 'Tab') { const f = [I ? inp : null, cancel.style.display === 'none' ? null : cancel, ok].filter(Boolean), i = f.indexOf(document.activeElement); e.preventDefault(); f[(i + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus(); } e.stopPropagation(); };
+      ok.onclick = () => { audio.click(); submit(); }; cancel.onclick = () => { audio.back(); done(I ? null : false); }; dlg.onmousedown = (e) => { if (e.target === dlg && o.cancel !== null) done(I ? null : false); };
+      dlg.addEventListener('keydown', key); dlg.classList.add('show'); dlg.setAttribute('aria-hidden', 'false'); (I ? inp : ok).focus();
+    }));
+    return this._dq;
+  }
+  confirm(o) { return this.dialog(o); }
+  prompt(o) { return this.dialog({ ...o, input: { placeholder: o.placeholder, min: o.min ?? 1, max: o.max ?? 200, value: o.value } }); }
+
+  // ---------- Benachrichtigungskarten (wie in Fortnite: oben/unten rechts, mit Aktionen und ablaufender Zeit) ----------
+  card({ id, kind = '', name, title, sub, actions = [], ttl = 25 }) {
+    const box = $('#notifs'); const old = id && box.querySelector('[data-nid="' + id + '"]'); if (old) old.remove();
+    const c = document.createElement('div'); c.className = 'ncard ' + kind; if (id) c.dataset.nid = id;
+    const h = document.createElement('div'); h.className = 'nh'; const av = document.createElement('div'); av.className = 'av'; av.textContent = (name || '?').slice(0, 1).toUpperCase();
+    const t = document.createElement('div'); t.className = 'tt'; t.textContent = title; const s = document.createElement('small'); s.textContent = sub || ''; t.appendChild(s); h.append(av, t); c.appendChild(h);
+    const close = () => { if (!c.isConnected || c.classList.contains('out')) return; c.classList.add('out'); setTimeout(() => c.remove(), 230); };
+    if (actions.length) { const a = document.createElement('div'); a.className = 'acts'; for (const x of actions) { const b = document.createElement('button'); b.className = 'btn small' + (x.primary ? ' primary' : ''); b.textContent = x.label; b.onclick = async () => { b.disabled = true; try { await x.run(); } finally { close(); } }; a.appendChild(b); } c.appendChild(a); }
+    const bar = document.createElement('div'); bar.className = 'ttl'; bar.style.animationDuration = ttl + 's'; c.appendChild(bar); setTimeout(close, ttl * 1000);
+    box.appendChild(c); while (box.children.length > 4) box.firstChild.remove(); audio.notify(); return close;
+  }
+  inMatchNow() { return this.g.mode === 'play' && this.g.inMatch && !this.g.matchEnded; }
+  wireSocial() {
+    const quiet = () => this.inMatchNow();   // im Match: Maus ist gesperrt → nur kurzer Hinweis ohne Knöpfe
+    Social.listen('friend_request', (m) => {
+      if (this.cur === 'friends') this.refreshFriends(); $('#fr-count').textContent = 'Neue Anfrage!';
+      if (quiet()) { this.toast(m.from + ' möchte dich als Freund hinzufügen (Menü → Freunde)', 'event'); audio.notify(); return; }
+      this.card({ id: 'fr:' + m.from, name: m.from, title: m.from + ' möchte dich als Freund hinzufügen', sub: 'Level ' + (m.level || 1), ttl: 30, actions: [
+        { label: 'Annehmen', primary: true, run: async () => { try { await Account.friendAction('accept', m.from); this.toast(m.from + ' ist jetzt dein Freund!', 'good'); audio.levelUp(); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } } },
+        { label: 'Ablehnen', run: async () => { try { await Account.friendAction('decline', m.from); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } } }] });
+    });
+    Social.listen('friend_accepted', (m) => { this.toast(m.from + ' hat deine Freundschaftsanfrage angenommen!', 'good'); audio.notify(); if (this.cur === 'friends') this.refreshFriends(); });
+    Social.listen('invite', (m) => {
+      const mode = MODES[m.mode]?.name || m.mode;
+      if (quiet()) { this.toast(m.from + ' lädt dich in eine Lobby ein (' + m.code + ')', 'event'); audio.notify(); return; }
+      this.card({ id: 'inv:' + m.from, kind: 'ninv', name: m.from, title: m.from + ' lädt dich in seine Lobby ein', sub: mode + ' · ' + m.players + (m.players === 1 ? ' Spieler' : ' Spieler') + ' · Raum ' + m.code, ttl: 45, actions: [
+        { label: 'Beitreten', primary: true, run: async () => { await this.joinRoom(m.code); } }, { label: 'Ablehnen', run: async () => {} }] });
+    });
+  }
+  // Freund einladen: legt bei Bedarf automatisch eine private Lobby an und schickt dann die Einladung
+  async inviteFriend(name) {
+    if (!Social.connected) { this.toast('Hinweis-Dienst nicht verbunden – bitte kurz warten.', 'bad'); return false; }
+    if (!this.g.roomCode) { const ok = await this.createRoom(false); if (!ok) return false; }
+    const r = await Social.invite(name);
+    if (r.ok) { this.toast('Einladung an ' + name + ' gesendet', 'good'); audio.click(); } else { this.toast(r.error || 'Einladung fehlgeschlagen', 'bad'); audio.error(); }
+    return r.ok;
+  }
+  async refreshLobbyFriends() {
+    const box = $('#lobby-invite'); if (!Account.user || !Social.connected) { box.style.display = 'none'; return; }
+    let d; try { d = await Account.friends(); } catch { return; }
+    const inLobby = new Set((this.lastLobby?.members || []).map(m => m.name.toLowerCase())), list = $('#lobby-friends'), online = d.friends.filter(f => f.online && !f.inMatch && !inLobby.has(f.username.toLowerCase()));
+    box.style.display = ''; $('#lobby-invite-n').textContent = '(' + online.length + ' online)'; list.replaceChildren();
+    if (!online.length) { list.innerHTML = '<div class="empty">Gerade ist kein Freund online, der eingeladen werden kann.</div>'; return; }
+    for (const f of online) {
+      const row = document.createElement('div'); row.className = 'room'; const l = document.createElement('div'); l.innerHTML = '<b></b> <small></small>'; l.querySelector('b').textContent = f.username; l.querySelector('small').textContent = 'Lv ' + f.level + (f.room ? ' · in einer Lobby' : ' · im Menü');
+      const b = document.createElement('button'); b.className = 'btn small'; b.textContent = 'Einladen'; b.onclick = async () => { b.disabled = true; const ok = await this.inviteFriend(f.username); if (ok) { b.textContent = 'Eingeladen ✓'; setTimeout(() => { b.disabled = false; b.textContent = 'Erneut einladen'; }, 15000); } else b.disabled = false; };
+      row.append(l, b); list.appendChild(row);
+    }
+  }
+  lobbyFriendsTick() {
+    if (this._lfTimer) return; this.refreshLobbyFriends();
+    this._lfTimer = setInterval(() => { if (this.cur === 'lobby') this.refreshLobbyFriends(); else { clearInterval(this._lfTimer); this._lfTimer = null; } }, 8000);
+  }
+
   // ---------- Emote-Rad ----------
   buildEmoteWheel() {
     const w = $('#emote-wheel'); if (!w || w.dataset.built) return; w.dataset.built = '1';
@@ -185,7 +260,7 @@ export class UI {
     const list = $('#fr-list'); list.replaceChildren(); $('#fr-total').textContent = '(' + d.friends.length + ')';
     if (!d.friends.length) list.innerHTML = '<div class="empty">Noch keine Freunde. Suche links nach Spielernamen.</div>';
     for (const f of d.friends) {
-      const acts = []; if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', () => { if (confirm(f.username + ' aus der Freundesliste entfernen?')) act('remove', f.username)(); }]);
+      const acts = []; if (f.online && !f.inMatch) acts.push(['Einladen', () => this.inviteFriend(f.username)]); if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', async () => { if (await this.confirm({ title: 'Freund entfernen?', lines: [f.username + ' wird aus deiner Freundesliste entfernt.', { cls: '', text: 'Ihr könnt euch jederzeit wieder hinzufügen.' }], ok: 'Entfernen', danger: true })) act('remove', f.username)(); }]);
       list.appendChild(row(f.username, `<span style="width:10px;height:10px;border-radius:50%;background:${f.online ? 'var(--good)' : '#556'};box-shadow:${f.online ? '0 0 8px var(--good)' : 'none'}"></span><b class="fn"></b><small>Lv ${f.level} · ${f.rank} · ${f.online ? (f.inMatch ? 'im Match' : f.room ? 'in einer Lobby' : 'online') : 'offline'}</small>`, acts));
     }
     const inn = $('#fr-in'); inn.replaceChildren(); if (!d.incoming.length) inn.innerHTML = '<div class="empty">Keine offenen Anfragen.</div>';
@@ -218,7 +293,7 @@ export class UI {
     const submit = async () => {
       err(); const u = $('#lg-user').value.trim(), p = $('#lg-pass').value; if (!u || !p) return err('Bitte Benutzername und Passwort eingeben.');
       $('#lg-ok').disabled = true;
-      try { if (mode === 'login') await Account.login(u, p); else await Account.register(u, p, $('#lg-owner').value); $('#lg-pass').value = ''; $('#lg-owner').value = ''; this.refreshProfile(); this.back(); this.toast('Willkommen, ' + Account.user.username + '!', 'good'); audio.levelUp(); }
+      try { if (mode === 'login') await Account.login(u, p); else await Account.register(u, p, $('#lg-owner').value); $('#lg-pass').value = ''; $('#lg-owner').value = ''; this.refreshProfile(); this.back(); Social.start(); this.checkFriendRequests(); this.toast('Willkommen, ' + Account.user.username + '!', 'good'); audio.levelUp(); }
       catch (e) { err(e.status ? e.message : 'Server nicht erreichbar.'); audio.error(); }
       $('#lg-ok').disabled = false;
     };
@@ -228,7 +303,7 @@ export class UI {
       try { const r = await Account.claimDaily(); audio.levelUp(); this.refreshProfile(); const part = [r.coins ? r.coins + ' Münzen' : '', r.xp ? r.xp + ' XP' : '', r.item ? 'Cosmetic: ' + CATALOG_BY_ID[r.item].name : ''].filter(Boolean).join(' + '); this.toast(`Tag ${r.day}: ${part} (Serie ${r.streak})`, 'good'); }
       catch (e) { this.toast(e.message, 'bad'); }
     };
-    $('#pc-logout').onclick = async () => { audio.back(); await Account.logout(); this.refreshProfile(); this.toast('Abgemeldet.'); };
+    $('#pc-logout').onclick = async () => { audio.back(); Social.stop(); await Account.logout(); this.refreshProfile(); this.toast('Abgemeldet.'); };
   }
   showReward(m, old) {
     const s = Account.user.stats, box = $('#res-xp'); if (!box) return;
@@ -282,8 +357,9 @@ export class UI {
     if (!this.ensureName(() => this.createRoom(isPublic))) return;
     this.toast('Verbinde …');
     try { await this.g.connect(false); } catch (e) { this.toast('Server nicht erreichbar. Siehe README.', 'bad'); audio.error(); return; }
-    this.g.net.on('joined', () => { if (!this.g.inMatch) this.showScreenKeep('lobby'); });
+    const joined = new Promise((res) => this.g.net.on('joined', () => { if (!this.g.inMatch) this.showScreenKeep('lobby'); res(true); }));
     this.g.net.send({ k: 'create', settings: { public: !!isPublic, mode: 'ffa', bots: 3, diff: 'normal', timeLimit: 6, tod: 'day', fillBots: true } });
+    return Promise.race([joined, new Promise(r => setTimeout(() => r(false), 6000))]);
   }
   async joinRoom(code) {
     code = String(code || '').toUpperCase().trim();
@@ -316,7 +392,7 @@ export class UI {
   setLobby(d, myId) {
     this.myId = myId; this.lastLobby = d; const g = this.g, S = d.settings, mode = MODES[S.mode], host = d.host === myId;
     if (this.cur !== 'lobby' && !g.inMatch && this.cur !== 'hud') this.showScreenKeep('lobby');
-    $('#lobby-code').textContent = d.code;
+    $('#lobby-code').textContent = d.code; this.lobbyFriendsTick(); { const sig = d.members.map(m => m.id).join(); if (sig !== this._lfSig) { this._lfSig = sig; this.refreshLobbyFriends(); } }
     $('#lobby-count').textContent = `(${d.members.length})`;
     $$('#lobby-modes .card').forEach(c => c.classList.toggle('on', c.dataset.id === S.mode)); $('#lobby-modes').classList.toggle('locked', !host);
     const mark = (sel, v) => $$(sel + ' button').forEach(b => b.classList.toggle('on', b.dataset.v == v));
@@ -328,7 +404,7 @@ export class UI {
     $('#lobby-wait').textContent = host ? `${mode.name} · bis zu ${mode.max} Spieler` : 'Warte auf den Host …';
     // Spielerliste
     const box = $('#lobby-teams'); box.innerHTML = '';
-    const mk = (m) => { const t = TEAMS[m.team]; const row = document.createElement('div'); row.className = 'pl' + (m.id === myId ? ' you' : ''); row.innerHTML = `<span class="dot" style="background:${t ? t.color : '#8fa6c4'}"></span><span>${esc(m.name)}</span><span class="lv">LV ${m.level || 1}</span>${m.id === d.host ? '<span class="host">HOST</span>' : ''}`; if (host && m.id !== myId) { const k = document.createElement('button'); k.className = 'kick'; k.textContent = '✕'; k.title = 'Entfernen'; k.onclick = () => g.send({ k: 'kick', id: m.id }); row.appendChild(k); } return row; };
+    const mk = (m) => { const t = TEAMS[m.team]; const row = document.createElement('div'); row.className = 'pl' + (m.id === myId ? ' you' : ''); const sk = SKINS.find(x => x.id === m.skin) || SKINS[0]; row.innerHTML = `<span class="av" style="background:${sk.armor};border-color:${t ? t.color : sk.accent}">${esc((m.name || '?').slice(0, 1).toUpperCase())}</span><span>${esc(m.name)}</span><span class="lv">LV ${m.level || 1}</span>${m.id === d.host ? '<span class="crown" title="Host">♛</span><span class="host">HOST</span>' : ''}`; if (host && m.id !== myId) { const k = document.createElement('button'); k.className = 'kick'; k.textContent = '✕'; k.title = 'Entfernen'; k.onclick = () => g.send({ k: 'kick', id: m.id }); row.appendChild(k); } return row; };
     if (!mode.teams) { const t = document.createElement('div'); t.className = 'team'; t.innerHTML = `<div class="th">Spieler</div>`; d.members.forEach(m => t.appendChild(mk(m))); const bots = mode.size ? 0 : S.bots; if (bots) { const r = document.createElement('div'); r.className = 'pl'; r.innerHTML = `<span class="dot" style="background:#ffd27a"></span><span style="color:var(--dim)">+ ${Math.min(bots, mode.max - d.members.length)} Bots (${DIFFS[S.diff].name})</span>`; t.appendChild(r); } box.appendChild(t); }
     else {
       const unassigned = d.members.filter(m => m.team < 0 || m.team >= mode.teams);
@@ -390,7 +466,9 @@ export class UI {
       if (owned(type, s.id)) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.refreshSkins(); return; }
       if (!inv) { audio.error(); this.toast(`${s.name}: erreiche Level ${s.level} (oder melde dich an, um zu kaufen).`, 'bad'); return; }
       const price = CATALOG_BY_ID[id].price;
-      if (!confirm(`${s.name} für ${price} Münzen kaufen?`)) return;
+      const coins = Account.inv?.coins ?? 0;
+      if (coins < price) { audio.error(); await this.confirm({ title: 'Nicht genug Münzen', lines: [s.name + ' kostet ' + price + ' Münzen.', 'Du hast ' + coins + ' Münzen – dir fehlen ' + (price - coins) + '.', { cls: '', text: 'Münzen gibt es für Matches, Tagesbelohnungen und die Season.' }], ok: 'Verstanden', cancel: null }); return; }
+      if (!(await this.confirm({ title: 'Kauf bestätigen', lines: [{ cls: 'dl-big', text: s.name }, 'Preis: ' + price + ' Münzen', { cls: '', text: 'Danach hast du ' + (coins - price) + ' Münzen übrig.' }], ok: 'Kaufen · ' + price + ' Münzen' }))) return;
       try { await Account.buy(id); audio.levelUp(); this.toast(s.name + ' gekauft!', 'good'); this.refreshProfile(); this.refreshSkins(); } catch (e) { audio.error(); this.toast(e.message, 'bad'); }
     };
     for (const s of SKINS) {
@@ -456,7 +534,7 @@ export class UI {
     let html = '<table><tr><th></th><th>Spieler</th><th>K</th><th>T</th><th>Kopf</th><th>Schaden</th><th></th></tr>';
     ev.board.forEach((b, i) => { const t = TEAMS[b.team]; html += `<tr class="${b.id === you ? 'me' : ''}"><td>${i + 1}</td><td style="color:${t ? t.color : 'inherit'}">${esc(ents.get(b.id)?.info.name || b.name)}</td><td>${b.k}</td><td>${b.d}</td><td>${b.hs}</td><td>${b.dmg}</td><td>${Account.user && b.id !== you && ents.get(b.id)?.info.acct ? `<button class="link" data-rep="${esc(b.name)}">Melden</button> <button class="link" data-mute="${esc(b.name)}">Stumm</button>` : ''}</td></tr>`; });
     $('#res-board').innerHTML = html + '</table>';
-    $$('#res-board [data-rep]').forEach(b => b.onclick = async () => { const why = prompt('Warum meldest du ' + b.dataset.rep + '? (z. B. Cheating, Beleidigung)'); if (!why) return; try { await Account.report(b.dataset.rep, why, this.g.lobby?.code); this.toast('Meldung gesendet. Danke!', 'good'); } catch (e) { this.toast(e.message, 'bad'); } });
+    $$('#res-board [data-rep]').forEach(b => b.onclick = async () => { const why = await this.prompt({ title: 'Spieler melden', lines: ['Warum meldest du ' + b.dataset.rep + '?'], placeholder: 'z. B. Cheating, Beleidigung', min: 3, max: 200, ok: 'Meldung senden' }); if (!why) return; try { await Account.report(b.dataset.rep, why, this.g.lobby?.code); this.toast('Meldung gesendet. Danke!', 'good'); } catch (e) { this.toast(e.message, 'bad'); } });
     $$('#res-board [data-mute]').forEach(b => b.onclick = async () => { try { await Account.mute(b.dataset.mute, true); this.g.send({ k: 'refreshmutes' }); this.toast(b.dataset.mute + ' ist stummgeschaltet.', 'good'); } catch (e) { this.toast(e.message, 'bad'); } });
     const d = Progress.d; const need = xpForLevel(d.level);
     $('#res-xp').innerHTML = `<div class="big">+${xp} XP</div><div class="lvl">${ups.length ? `LEVEL UP! → Level ${d.level}` : `Level ${d.level}`} · Abschüsse ${stats.kills} · Kopftreffer ${stats.hs}</div><div class="xb"><i style="width:${ups.length ? 8 : 100 * (d.xp - xp) / need}%"></i></div>`;
