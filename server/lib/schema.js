@@ -93,4 +93,10 @@ export const MIGRATIONS = [
       coins INT NOT NULL, claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (season_id, user_id, tier)
     );
   ` },
+  { v: 6, name: 'analytics', sql: `
+    CREATE TABLE IF NOT EXISTS analytics_daily (
+      day DATE NOT NULL, metric TEXT NOT NULL, dim TEXT NOT NULL DEFAULT '', value BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, metric, dim)
+    )
+  ` },
 ];

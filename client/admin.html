@@ -10,6 +10,7 @@ button{cursor:pointer}button:hover{border-color:var(--c)}button.on{background:#1
 main{padding:0 18px 40px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #1d2a47;font-size:14px;vertical-align:top}th{color:var(--d);font-weight:600}
 .card{background:var(--p);border:1px solid var(--l);padding:14px;max-width:360px;margin:60px auto}.err{color:var(--bad);min-height:20px}.mut{color:var(--d)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
 code{background:#0d1424;padding:1px 5px;border-radius:3px}
+.spark{display:flex;align-items:flex-end;gap:2px;height:34px;min-width:160px}.spark i{flex:1;background:var(--c);opacity:.75;min-height:1px}.spark i:last-child{opacity:1}.kpis{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}.kpi{background:var(--p);border:1px solid var(--l);padding:10px 16px;min-width:130px}.kpi b{display:block;font-size:24px;color:var(--c)}.kpi span{color:var(--d);font-size:13px}
 </style></head><body>
 <header><b>NEON FRONTIER · ADMIN</b><span class="mut" id="who"></span><span style="flex:1"></span><button id="out" style="display:none">Abmelden</button></header>
 <div id="login" class="card"><h3>Anmelden</h3><div class="row"><input id="u" placeholder="Benutzername" autocomplete="username"></div><div class="row"><input id="p" type="password" placeholder="Passwort" autocomplete="current-password"></div><div class="err" id="err"></div><button id="go">Anmelden</button><p class="mut">Nur Konten mit Rolle Moderator/Admin/Owner haben Zugriff. Alle Rechte werden vom Server geprüft.</p></div>
@@ -23,7 +24,7 @@ let token = localStorage.getItem('nf_token'), me = null, tab = 'players';
 const api = async (m, p, b) => { const r = await fetch(base + p, { method: m, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: b ? JSON.stringify(b) : undefined }); const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status }); return j; };
 const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); for (const k of kids) e.append(k); return e; };   // nur textContent → kein XSS
 const fmt = (d) => d ? new Date(d).toLocaleString('de-DE') : '–';
-const TABS = [['players', 'Spieler'], ['reports', 'Meldungen'], ['server', 'Server & Features'], ['suspicious', 'Verdächtig'], ['audit', 'Audit-Log']];
+const TABS = [['players', 'Spieler'], ['reports', 'Meldungen'], ['server', 'Server & Features'], ['analytics', 'Analytics'], ['backup', 'Backup'], ['suspicious', 'Verdächtig'], ['audit', 'Audit-Log']];
 async function start() {
   try { me = (await api('GET', '/api/me')).user; } catch { me = null; }
   if (!me || me.role === 'PLAYER') { $('#login').style.display = ''; $('#app').style.display = 'none'; if (me) $('#err').textContent = 'Keine Berechtigung für diesen Bereich.'; return; }
@@ -58,6 +59,29 @@ const VIEWS = {
     m.append(el('div', { className: 'row' }, el('button', { className: s.flags.maintenance ? 'bad' : '', textContent: s.flags.maintenance ? 'Wartungsmodus AUS schalten' : 'Wartungsmodus EIN schalten', onclick: async () => { await api('POST', '/api/admin/maintenance', { on: !s.flags.maintenance }); start(); } })));
     m.append(el('h3', { textContent: 'Feature-Flags' }), el('div', { className: 'row' }, ...Object.entries(s.flags).filter(([k]) => k !== 'maintenance').map(([k, v]) => el('button', { className: v ? 'on' : '', textContent: k + ': ' + (v ? 'AN' : 'AUS'), onclick: async () => { await api('POST', '/api/admin/flag', { key: k, value: !v }); start(); } }))));
     m.append(el('h3', { textContent: 'Aktive Räume' }), el('table', {}, ...s.rooms.map(r => el('tr', {}, el('td', { textContent: r.code }), el('td', { textContent: r.state }), el('td', { textContent: r.mode }), el('td', { textContent: r.players + ' Spieler' })))));
+  },
+  async analytics(m) {
+    if (me.role === 'MODERATOR') { m.append(el('p', { className: 'mut', textContent: 'Nur für Admins.' })); return; }
+    const days = +(sessionStorage.getItem('an_days') || 14), d = await api('GET', '/api/admin/analytics?days=' + days), T = d.totals;
+    const sel = el('select', { onchange: () => { sessionStorage.setItem('an_days', sel.value); start(); } }); for (const n of [7, 14, 30, 90]) sel.append(el('option', { value: n, textContent: 'letzte ' + n + ' Tage', selected: n === days }));
+    m.append(el('div', { className: 'row' }, sel, el('span', { className: 'mut', textContent: d.enabled ? 'Zählung aktiv' : 'Zählung AUS (Feature-Flag „analytics“)' })));
+    m.append(el('div', { className: 'kpis' }, ...[['Konten gesamt', T.accounts], ['Neu (7 Tage)', T.newAccounts7d], ['Logins 24 h', T.logins24h], ['Logins 7 Tage', T.logins7d], ['Matches gesamt', T.matchesTotal]].map(([n, v]) => el('div', { className: 'kpi' }, el('b', { textContent: v }), el('span', { textContent: n })))));
+    const NAMES = { register: 'Registrierungen', login: 'Logins', login_fail: 'Fehlgeschlagene Logins', match_end: 'Matches (nach Modus)', match_secs: 'Spielsekunden (nach Modus)', match_humans: 'Menschen in Matches (Summe)', purchase: 'Käufe (nach Typ)', daily_claim: 'Tagesbelohnungen', season_claim: 'Season-Belohnungen', emote: 'Emotes (nach Art)', report: 'Meldungen', ban: 'Sperren', peak_players: 'Spitze: gleichzeitige Spieler', peak_rooms: 'Spitze: gleichzeitige Räume' };
+    const rows = Object.entries(d.metrics).sort(([a], [b]) => a.localeCompare(b)); const tb = el('table', {}, el('tr', {}, ...['Kennzahl', 'Verlauf', d.days[0] + ' → ' + d.days.at(-1), 'Aufteilung'].map(h => el('th', { textContent: h }))));
+    for (const [k, v] of rows) { const mx = Math.max(1, ...v.byDay), sp = el('div', { className: 'spark' }, ...v.byDay.map((n, i) => el('i', { style: 'height:' + Math.max(2, 100 * n / mx) + '%', title: d.days[i] + ': ' + n })));
+      tb.append(el('tr', {}, el('td', { textContent: NAMES[k] || k }), el('td', {}, sp), el('td', { textContent: (k.startsWith('peak_') ? 'max ' : 'Σ ') + v.total }), el('td', { className: 'mut', textContent: v.dims ? Object.entries(v.dims).sort((a, b) => b[1] - a[1]).map(([n, c]) => n + ' ' + c).join(' · ') : '' }))); }
+    m.append(tb); if (!rows.length) m.append(el('p', { className: 'mut', textContent: 'Noch keine Daten – Zähler werden alle 30 Sekunden gespeichert.' }));
+    m.append(el('p', { className: 'mut', textContent: 'Datenschutz: Es werden nur anonyme Tageszähler gespeichert (keine Spieler-IDs, keine IP-Adressen, keine Cookies). Tage rechnen in UTC; Daten älter als 400 Tage werden gelöscht.' }));
+  },
+  async backup(m) {
+    if (me.role !== 'OWNER') { m.append(el('p', { className: 'mut', textContent: 'Nur der Besitzer darf Backups herunterladen.' })); return; }
+    const msg = el('p', { className: 'mut' }), btn = el('button', { textContent: 'Verschlüsseltes Backup herunterladen', onclick: async () => {
+      btn.disabled = true; msg.className = 'mut'; msg.textContent = 'Erstelle Backup …';
+      try { const r = await fetch(base + '/api/admin/backup', { headers: { Authorization: 'Bearer ' + token } }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+        const b = await r.blob(), a = el('a', { href: URL.createObjectURL(b), download: (r.headers.get('content-disposition') || '').split('filename=')[1]?.replace(/"/g, '') || 'neon-frontier.nfbackup' }); document.body.append(a); a.click(); a.remove(); msg.textContent = 'Fertig (' + Math.round(b.size / 1024) + ' KB). Bewahre die Datei sicher auf.'; }
+      catch (e) { msg.className = 'err'; msg.textContent = e.message; } btn.disabled = false; } });
+    m.append(el('h3', { textContent: 'Datenbank-Backup' }), el('p', { textContent: 'Lädt alle Konten, Fortschritte, Inventare, Freundschaften, Seasons und Zähler als verschlüsselte Datei (AES-256) herunter. Sitzungen sind nicht enthalten.' }),
+      el('p', { className: 'mut', textContent: 'Voraussetzung: Auf dem Server (Render → Environment) ist BACKUP_PASSPHRASE gesetzt (mind. 12 Zeichen). Ohne diese Passphrase ist die Datei nicht lesbar – merke sie dir gut, sie steht nirgends sonst. Wiederherstellen: siehe docs/BACKUPS.md.' }), el('div', { className: 'row' }, btn), msg);
   },
   async suspicious(m) {
     if (me.role === 'MODERATOR') { m.append(el('p', { className: 'mut', textContent: 'Nur für Admins.' })); return; }

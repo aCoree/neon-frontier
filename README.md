@@ -62,7 +62,7 @@ git push -u origin main
 3. Test: `https://neon-frontier.onrender.com/health` muss `{"ok":true,…}` liefern.
 
 Hinweise zum Gratis-Plan: Render schläft nach ~15 Minuten Inaktivität ein. Der erste Verbindungsversuch kann dann bis zu einer Minute dauern (Menü „Multiplayer“ zeigt den Serverstatus an – einfach nochmal auf „Aktualisieren“). Gleichwertige Alternativen: **Railway**, **Fly.io** (`Dockerfile` ist enthalten), **Koyeb**, ein eigener Server/VPS (`npm start`, z. B. mit `pm2`).
-Umgebungsvariablen: `PORT` (vom Hoster gesetzt), `SERVE_CLIENT=0`, sowie für Konten `DATABASE_URL`, `OWNER_USERNAME`, `OWNER_REGISTER_CODE` – Einrichtung Schritt für Schritt in [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+Umgebungsvariablen: `PORT` (vom Hoster gesetzt), `SERVE_CLIENT=0`, sowie für Konten `DATABASE_URL`, `OWNER_USERNAME`, `OWNER_REGISTER_CODE`, optional `BACKUP_PASSPHRASE` (Backup-Download) – Einrichtung Schritt für Schritt in [docs/ACCOUNTS.md](docs/ACCOUNTS.md). Backups & Analytics: `docs/BACKUPS.md`.
 
 ### Schritt C – Frontend auf GitHub Pages veröffentlichen
 

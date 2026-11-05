@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 import { Room } from '../client/js/shared/sim/room.js';
 import { MODES } from '../client/js/shared/defs.js';
 import { Api } from './lib/api.js';
+import { Analytics } from './lib/analytics.js';
 import { applyMatchResult } from './lib/progression.js';
 import { can, filterText } from './lib/auth.js';
 
@@ -33,8 +34,10 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.connected) return { online: true, room: r.state === 'lobby' ? r.code : null, inMatch: r.state !== 'lobby' };
     return { online: true };
   };
-  const api = new Api({
-    db, config, log, presence, metrics: () => metricsSnapshot(),
+  let api;
+  const stats = new Analytics(db, { enabled: () => api.flags.analytics !== false, log, sample: (a) => { a.max('peak_players', '', playersOnline()); a.max('peak_rooms', '', rooms.size); } });
+  api = new Api({
+    db, stats, config, log, presence, metrics: () => metricsSnapshot(),
     rooms: () => [...rooms.values()].map(r => ({ code: r.code, state: r.state, mode: r.settings.mode, players: r.humans().length, matchId: r.matchId })),
     onBan: (userId, reason) => { for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
   });
@@ -64,9 +67,11 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     const client = { send(o, raw) { if (ws.readyState === 1) { try { const d = raw ? o : JSON.stringify(o); M.bytesOut += d.length; ws.send(d); } catch { /* Verbindung weg */ } } }, close() { try { ws.close(); } catch { /* ignore */ } } };
     let room = null, member = null, profile = null, bucket = 120, lastRefill = Date.now(), chain = Promise.resolve();
 
-    const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, emotesAllowed: () => api.flags.emotes, filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
+    const hooksFor = () => { const h = { room: null, chatAllowed: () => api.flags.chat, emotesAllowed: () => api.flags.emotes, track: (m, d) => stats.inc(m, d), filter: filterText, suspicious: (m, kind, detail) => api.suspicious(m.userId, m.name, kind, detail, h.room?.matchId), matchEnd: (r, matchId, results) => finishMatch(r, matchId, results) }; return h; };
     async function finishMatch(r, matchId, results) {
       if (!db) return;
+      const mode = r.settings.mode, secs = Math.round(r.T - (r.matchStart || 0)), humans = r.humans().length;
+      stats.inc('match_end', mode); stats.inc('match_secs', mode, secs); stats.inc('match_humans', mode, humans);
       for (const x of results) {
         try {
           const rew = await applyMatchResult(db, x.userId, matchId, { kills: x.kills, deaths: x.deaths, hs: x.hs, dmg: x.dmg, won: x.won, secs: x.secs, humans: x.humans, ranked: x.ranked && api.flags.ranked });
@@ -140,8 +145,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   const pingTimer = setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; try { ws.ping(); } catch { /* ignore */ } } }, 15000);
 
   return {
-    server, api, rooms, wss,
-    async start(port) { await api.init(); await new Promise(r => server.listen(port, r)); return server.address().port; },
-    async stop() { clearInterval(tickTimer); clearInterval(pingTimer); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(r => server.close(r)); },
+    server, api, rooms, wss, stats,
+    async start(port) { await api.init(); stats.start(); await new Promise(r => server.listen(port, r)); return server.address().port; },
+    async stop() { await stats.stop().catch(() => {}); clearInterval(tickTimer); clearInterval(pingTimer); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(r => server.close(r)); },
   };
 }

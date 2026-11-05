@@ -42,9 +42,9 @@ Danach **Manual Deploy → Deploy latest commit**. In den Logs muss stehen: `[db
 * **Emotes:** 8 feste Emotes (Taste **B halten + 1–8**, im Spiel auch per Klick), Sprechblase über dem Kopf. Der Server prüft die ID (nur aus der festen Liste), erlaubt nur lebenden Spielern ein Emote und erzwingt 2,5 s Abklingzeit pro Spieler; sie werden wie andere positionsbezogene Events nur an Spieler in 140 m Reichweite gesendet. Stummgeschaltete Spieler werden clientseitig ausgeblendet. Es gibt keinen Freitext, also nichts zu filtern. Abschaltbar über das Flag `emotes`.
 
 ## 5. Noch nicht gebaut (bewusst)
- Analytics, Backups/Restore-Werkzeuge, Profilbilder, Saison-Abschlussbelohnungen (z. B. Titel für die Top 3). 
-**Backups:** Supabase legt im Gratis-Plan keine Wiederherstellungs-Backups an. Bis das Backup-System gebaut ist: im Supabase-Dashboard regelmäßig *Database → Backups* prüfen bzw. mit `pg_dump` sichern.
+ Profilbilder, Saison-Abschlussbelohnungen (z. B. Titel für die Top 3). 
+**Backups & Analytics:** siehe [BACKUPS.md](BACKUPS.md) – verschlüsselte Backups (Download im Admin-Bereich oder per `npm run backup`), geprüfter Restore, anonyme Tageszähler mit Dashboard.
 
 ## 6. Tests
-`npm test` führt alles aus: Simulation, `server/test-emotes.js` (10 Emote-Regeltests) und `npm run test:accounts` – 87 Integrationstests gegen echtes Postgres (PGlite): Registrierung, Login-Sperre, Passwort-Hash, Rollen, Sperren, Reports, Mutes, idempotente Belohnungen, Wartungsmodus, Flags, Bann-im-Match, Shop (Doppelkauf/Race Conditions), Ausrüstung, Tagesbelohnung, Freunde/Suche/Online-Status, Seasons (Punkte, Doppelzählung, Abholung, Race Condition, Rangliste).
+`npm test` führt alles aus: Simulation, `server/test-emotes.js` (10 Emote-Regeltests) und `npm run test:accounts` – 99 Integrationstests (inkl. Analytics-/Backup-API) plus `server/test-backup.js` (23 Tests: Backup-Roundtrip, Manipulation, Rollback, Analytics) gegen echtes Postgres (PGlite): Registrierung, Login-Sperre, Passwort-Hash, Rollen, Sperren, Reports, Mutes, idempotente Belohnungen, Wartungsmodus, Flags, Bann-im-Match, Shop (Doppelkauf/Race Conditions), Ausrüstung, Tagesbelohnung, Freunde/Suche/Online-Status, Seasons (Punkte, Doppelzählung, Abholung, Race Condition, Rangliste).
 `node server/tools/dev-pglite.mjs` startet lokal einen Server **mit** Konten (Daten nur im Speicher).

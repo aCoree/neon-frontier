@@ -5,6 +5,7 @@ import WebSocket from 'ws';
 import { createApp } from './app.js';
 import { connectPglite, migrate } from './lib/db.js';
 import { applyMatchResult } from './lib/progression.js';
+import { readBackup } from './lib/backup.js';
 
 const quiet = { log() {}, error: console.error };
 const db = await connectPglite(); await migrate(db); await migrate(db); // zweimal: Migration muss idempotent sein
@@ -134,6 +135,22 @@ const slb = await call('GET', '/api/season', null, sb.token); assert.equal(slb.t
 await call('POST', '/api/admin/ban', { username: 'Seasona', minutes: 30, reason: 'Test' }, ow.token); assert.ok(!(await call('GET', '/api/season', null, sb.token)).top.some(x => x.name === 'Seasona')); await call('POST', '/api/admin/unban', { username: 'Seasona' }, ow.token); ok('Gesperrte Spieler verschwinden aus der Rangliste');
 await call('POST', '/api/admin/flag', { key: 'seasons', value: false }, ow.token); assert.equal((await call('POST', '/api/season/claim', { tier: 2 }, sb.token)).s, 503); await call('POST', '/api/admin/flag', { key: 'seasons', value: true }, ow.token); ok('Feature-Flag schaltet Seasons-Abholung ab');
 
+console.log('Analytics & Backup (API)');
+await app.stats.flush(); const an0 = await call('GET', '/api/admin/analytics?days=7', null, ow.token); assert.equal(an0.s, 200); assert.equal(an0.days.length, 7);
+assert.ok(an0.metrics.register.total >= 3 && an0.metrics.login.total >= 1 && an0.metrics.login_fail.total >= 8 && an0.metrics.ban.dims.temporary >= 1 && an0.metrics.report.total >= 1); ok('Registrierungen, Logins, Fehlversuche, Sperren und Meldungen werden gezählt');
+assert.ok(an0.metrics.purchase?.total >= 1 && an0.metrics.daily_claim?.total >= 1 && an0.metrics.season_claim?.total >= 1); ok('Käufe, Tagesbelohnungen und Season-Abholungen werden gezählt');
+assert.ok(an0.totals.accounts >= 10 && an0.totals.matchesTotal >= 1 && an0.totals.logins7d >= 1); ok('Gesamtzahlen (Konten, Matches, aktive Logins) kommen aus den echten Daten');
+assert.equal((await call('GET', '/api/admin/analytics', null, mod.token)).s, 403); assert.equal((await call('GET', '/api/admin/analytics', null, al.token)).s, 403); assert.equal((await call('GET', '/api/admin/analytics')).s, 401); ok('Analytics nur für Admins/Besitzer (Moderator, Spieler, anonym: abgewiesen)');
+assert.equal((await call('GET', '/api/admin/analytics?days=100000', null, ow.token)).days.length, 90); assert.equal((await call('GET', '/api/admin/analytics?days=abc', null, ow.token)).days.length, 14); ok('Zeitraum wird begrenzt (max. 90 Tage)');
+assert.ok(!JSON.stringify(an0).match(/Alice|Bobby|Carol|password|token/i)); ok('Analytics-Antwort enthält keine Namen, Passwörter oder Tokens');
+await call('POST', '/api/admin/flag', { key: 'analytics', value: false }, ow.token); const regOff = (await call('GET', '/api/admin/analytics', null, ow.token)).metrics.register.total; await reg('NoCount1', 'Passw0rd!x', {}, '13.0.0.1'); await app.stats.flush(); assert.equal((await call('GET', '/api/admin/analytics', null, ow.token)).metrics.register.total, regOff); await call('POST', '/api/admin/flag', { key: 'analytics', value: true }, ow.token); ok('Flag „analytics" aus → es wird nichts mehr gezählt');
+assert.equal((await call('GET', '/api/admin/backup', null, mod.token)).s, 403); assert.equal((await call('GET', '/api/admin/backup', null, al.token)).s, 403); ok('Backup-Download: nur der Besitzer');
+assert.equal((await call('GET', '/api/admin/backup', null, ow.token)).s, 503); ok('Ohne BACKUP_PASSPHRASE auf dem Server gibt es keinen (unverschlüsselten) Download');
+app.api.cfg.backupPassphrase = 'test-passphrase-123456';
+const bk = await fetch(base + '/api/admin/backup', { headers: { Authorization: 'Bearer ' + ow.token } }); assert.equal(bk.status, 200); assert.ok((bk.headers.get('content-disposition') || '').includes('.nfbackup'));
+const bkBuf = Buffer.from(await bk.arrayBuffer()); const rbk = readBackup(bkBuf, 'test-passphrase-123456'); assert.ok(rbk.head.tables.users >= 10 && rbk.head.tables.sessions === undefined); assert.throws(() => readBackup(bkBuf, 'falsch-falsch-falsch'), /Passphrase/); ok('Besitzer lädt ein verschlüsseltes, prüfbares Backup herunter (ohne Sitzungen)');
+assert.ok((await call('GET', '/api/admin/audit', null, ow.token)).logs.some(x => x.action === 'backup_download')); ok('Backup-Download steht im Audit-Log');
+
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
 const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');
@@ -143,6 +160,7 @@ const room = [...app.rooms.values()].find(r => [...r.members.values()].some(m =>
 const rewardP = new Promise(res => w1.ws.on('message', (d) => { const m = JSON.parse(d); if (m.k === 'reward') res(m); }));
 room.state = 'playing'; const me0 = [...room.ents.values()].find(e => e.member && e.member.userId); me0.kills = 4; room.endMatch();
 const rew = await Promise.race([rewardP, new Promise((_, rej) => setTimeout(() => rej(new Error('kein reward')), 4000))]); assert.ok(rew.xp > 0 && rew.level >= 1); ok('Match-Ende → Server vergibt XP und sendet "reward"');
+await app.stats.flush(); { const mm = (await call('GET', '/api/admin/analytics', null, ow.token)).metrics; assert.ok(mm.match_end?.total >= 1 && mm.match_secs && mm.match_humans); ok('Match-Ende wird als anonymer Zähler erfasst (Modus, Dauer, Menschen)'); }
 assert.equal(room.members.size, 1); w1.ws.close();
 assert.equal((await call('POST', '/api/admin/maintenance', { on: true }, ow.token)).s, 200);
 const gm = await wsHello({ name: 'Gast1' }); assert.equal(gm.m.code, 'maintenance'); const om = await wsHello({ token: ow.token }); assert.equal(om.m.k, 'welcome'); ok('Wartungsmodus sperrt Spieler aus, Besitzer darf rein');

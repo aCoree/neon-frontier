@@ -2,15 +2,16 @@
 import crypto from 'node:crypto';
 import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK } from './auth.js';
 import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
+import { exportBackup } from './backup.js';
 import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
-export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, maintenance: false };
+export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, analytics: true, maintenance: false };
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
-  constructor({ db, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, presence = () => ({ online: false }), log = console }) {
-    this.presence = presence; this.db = db; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
+  constructor({ db, stats = null, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, presence = () => ({ online: false }), log = console }) {
+    this.presence = presence; this.db = db; this.stats = stats || { inc() {}, max() {}, report: async () => ({ days: [], metrics: {} }) }; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
     this.rl = new RateLimiter(); this.flags = { ...DEFAULT_FLAGS };
   }
   async init() {
@@ -134,6 +135,7 @@ export class Api {
       return { ok: true };
     });
     if (out.error) return this.send(res, out.code, { error: out.error });
+    this.stats.inc('purchase', item.type);
     this.send(res, 200, await this.inventory(user));
   }
   async equip(req, res, user) {
@@ -165,6 +167,7 @@ export class Api {
       return { ok: true, streak, day: ((streak - 1) % 7) + 1, coins, xp, item };
     });
     if (out.error) return this.send(res, out.code, { error: out.error });
+    this.stats.inc('daily_claim');
     this.send(res, 200, { reward: out, inventory: await this.inventory(user) });
   }
   // ---------- Seasons ----------
@@ -194,6 +197,7 @@ export class Api {
       return { ok: true, coins: tier.coins };
     });
     if (out.error) return this.send(res, out.code, { error: out.error });
+    this.stats.inc('season_claim');
     this.send(res, 200, { coins: out.coins, season: await this.season(user) });
   }
   async createSession(userId, req) {
@@ -259,7 +263,7 @@ export class Api {
       });
     } catch (e) { if (e.code === '23505' || /unique/i.test(e.message)) return this.send(res, 409, { error: 'Dieser Benutzername ist schon vergeben.' }); throw e; }
     await grantUnlocks(this.db, user.id, 1);
-    await this.audit(user, 'register', username, isOwner ? 'owner' : '');
+    await this.audit(user, 'register', username, isOwner ? 'owner' : ''); this.stats.inc('register');
     this.send(res, 200, { token: await this.createSession(user.id, req), user: await this.publicUser(user) });
   }
 
@@ -272,12 +276,13 @@ export class Api {
     const ok = u && typeof b.password === 'string' && b.password.length <= 128 && await verifyPassword(b.password, u.password_hash);
     if (!ok) {
       if (!u) await hashPassword('x'); // gleiche Laufzeit, kein Benutzer-Orakel
+      this.stats.inc('login_fail');
       const left = this.rl.hit(lockKey, 8, 900000) ? 0 : 1; if (this.rl.count(lockKey) >= 6) await this.suspicious(u?.id, uname, 'login_failures', `ip=${ip} n=${this.rl.count(lockKey)}`);
       return this.send(res, 401, { error: 'Benutzername oder Passwort falsch.' });
     }
     const ban = this.banInfo(u); if (ban) return this.send(res, 403, { error: 'Dein Konto ist gesperrt.', ban });
     this.rl.clear(lockKey);
-    await this.db.query('UPDATE users SET last_login=now() WHERE id=$1', [u.id]);
+    await this.db.query('UPDATE users SET last_login=now() WHERE id=$1', [u.id]); this.stats.inc('login');
     this.send(res, 200, { token: await this.createSession(u.id, req), user: await this.publicUser(u) });
   }
 
@@ -286,7 +291,7 @@ export class Api {
     if (this.rl.hit('rep:' + user.id, 5, 600000)) return this.send(res, 429, { error: 'Zu viele Meldungen. Bitte warten.' });
     const t = await this.db.one('SELECT id, username FROM users WHERE username_lower=$1', [clip(b.target, 16).toLowerCase()]);
     const reason = clip(b.reason, 200); if (!t || t.id === user.id || reason.length < 3) return this.send(res, 400, { error: 'Ungültige Meldung.' });
-    await this.db.query('INSERT INTO reports (reporter_id, reported_id, reason, match_id) VALUES ($1,$2,$3,$4)', [user.id, t.id, reason, clip(b.matchId, 40) || null]);
+    await this.db.query('INSERT INTO reports (reporter_id, reported_id, reason, match_id) VALUES ($1,$2,$3,$4)', [user.id, t.id, reason, clip(b.matchId, 40) || null]); this.stats.inc('report');
     this.send(res, 200, { ok: true });
   }
   async mute(req, res, user, on) {
@@ -310,6 +315,22 @@ export class Api {
     if (m === 'GET' && path === '/api/admin/suspicious') { if (!can(user.role, 'ADMIN')) return this.send(res, 403, { error: 'Keine Berechtigung.' }); return this.send(res, 200, { events: await this.db.all('SELECT * FROM suspicious_events ORDER BY created_at DESC LIMIT 100') }); }
     if (m === 'GET' && path === '/api/admin/audit') { if (!can(user.role, 'ADMIN')) return this.send(res, 403, { error: 'Keine Berechtigung.' }); return this.send(res, 200, { logs: await this.db.all('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100') }); }
     if (m === 'GET' && path === '/api/admin/server') { if (!can(user.role, 'ADMIN')) return this.send(res, 403, { error: 'Keine Berechtigung.' }); return this.send(res, 200, { metrics: this.metrics(), rooms: this.rooms(), flags: this.flags, status: this.maintenance ? 'MAINTENANCE' : 'ONLINE' }); }
+    if (m === 'GET' && path === '/api/admin/analytics') {
+      if (!can(user.role, 'ADMIN')) return this.send(res, 403, { error: 'Keine Berechtigung.' });
+      const rep = await this.stats.report(Number(q.get('days')) || 14);
+      const t = await this.db.one("SELECT (SELECT COUNT(*) FROM users) AS accounts, (SELECT COUNT(*) FROM users WHERE created_at > now() - interval '7 days') AS new7, (SELECT COUNT(*) FROM users WHERE last_login > now() - interval '24 hours') AS login24, (SELECT COUNT(*) FROM users WHERE last_login > now() - interval '7 days') AS login7, (SELECT COUNT(DISTINCT match_id) FROM match_results) AS matches");
+      return this.send(res, 200, { ...rep, enabled: !!this.flags.analytics, totals: { accounts: Number(t.accounts), newAccounts7d: Number(t.new7), logins24h: Number(t.login24), logins7d: Number(t.login7), matchesTotal: Number(t.matches) } });
+    }
+    if (m === 'GET' && path === '/api/admin/backup') {   // nur Besitzer; die Passphrase liegt als Umgebungsvariable auf dem Server (nie im Browser)
+      if (user.role !== 'OWNER') return this.send(res, 403, { error: 'Nur der Besitzer darf Backups herunterladen.' });
+      const pass = this.cfg.backupPassphrase || process.env.BACKUP_PASSPHRASE || '';
+      if (pass.length < 12) return this.send(res, 503, { error: 'Backup-Download ist aus: Setze auf dem Server die Umgebungsvariable BACKUP_PASSPHRASE (mind. 12 Zeichen).' });
+      if (this.rl.hit('backup:' + user.id, 4, 3600000)) return this.send(res, 429, { error: 'Maximal 4 Backups pro Stunde.' });
+      const buf = await exportBackup(this.db, { passphrase: pass });
+      await this.audit(user, 'backup_download', '', Math.round(buf.length / 1024) + ' KB');
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="neon-frontier-' + new Date().toISOString().slice(0, 10) + '.nfbackup"', 'Content-Length': buf.length, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(buf);
+    }
     if (m !== 'POST') return this.send(res, 404, { error: 'Unbekannte Route.' });
     const b = await this.body(req);
     if (path === '/api/admin/ban') {
@@ -320,6 +341,7 @@ export class Api {
       if (!perm && !can(user.role, 'ADMIN') && mins > 10080) return this.send(res, 403, { error: 'Moderatoren: maximal 7 Tage.' });
       await this.db.query(`UPDATE users SET ban_permanent=$2, banned_until = CASE WHEN $2 THEN NULL ELSE now() + ($3 || ' minutes')::interval END, ban_reason=$4 WHERE id=$1`, [t.id, perm, String(mins), reason]);
       await this.db.query('DELETE FROM sessions WHERE user_id=$1', [t.id]); this.onBan(Number(t.id), reason);
+      this.stats.inc('ban', perm ? 'permanent' : 'temporary');
       await this.audit(user, perm ? 'ban_permanent' : 'ban_temporary', t.username, `${reason}${perm ? '' : ` (${mins} min)`}`);
       return this.send(res, 200, { ok: true });
     }

@@ -1,5 +1,5 @@
 # Render.com Blueprint: Multiplayer-Server (kostenloser Plan möglich).
-# Geheime Werte (DATABASE_URL, OWNER_REGISTER_CODE) trägst du im Render-Dashboard ein – sie stehen NICHT im Repository.
+# Geheime Werte (DATABASE_URL, OWNER_REGISTER_CODE, BACKUP_PASSPHRASE) trägst du im Render-Dashboard ein – sie stehen NICHT im Repository.
 services:
   - type: web
     name: neon-frontier
@@ -16,4 +16,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: OWNER_REGISTER_CODE
+        sync: false
+      - key: BACKUP_PASSPHRASE   # optional: schaltet den verschlüsselten Backup-Download im Admin-Bereich frei (mind. 12 Zeichen)
         sync: false

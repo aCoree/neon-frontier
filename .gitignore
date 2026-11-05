@@ -1,3 +1,9 @@
 node_modules/
 .DS_Store
 .DS_Store
+
+# Backups enthalten Passwort-Hashes: niemals einchecken
+backups/
+*.nfbackup
+*.dump
+*.sql

@@ -110,7 +110,7 @@ export class Room {
         const idx = EMOTES.findIndex(x => x.id === msg.id); if (idx < 0 || !e.alive) return;
         if (this.hooks?.emotesAllowed && !this.hooks.emotesAllowed()) return;
         const now = Date.now(); if (now < (m.emoteAt || 0)) return; m.emoteAt = now + EMOTE_COOLDOWN * 1000;
-        this.emit({ k: 'emote', id: e.id, e: idx }); return;
+        this.emit({ k: 'emote', id: e.id, e: idx }); this.hooks?.track?.('emote', msg.id); return;
       }
       case 'suicide': if (e.alive && !this.settings.training) this.damage(e, 9999, e, { w: 'fall' }); return;
     }
