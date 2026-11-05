@@ -1,5 +1,6 @@
 // Baut die komplette 3D-Welt (Gelände, Gebäude, Vegetation, Wasser, Lichter, Animationen) aus den Kartendaten.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Batch, addBox, addCyl, addSphere, addRibbon, treeGeos, smallGeos } from './geo.js';
 import { terrainTextures, glowSpriteTexture, labelTexture, updateNight } from './textures.js';
 import { fbm, noise2, smoothstep, lerp, clamp, mulberry32 } from '../shared/util.js';
@@ -257,16 +258,14 @@ export class WorldView {
 
   // ---------------- Glows / Labels / Lichter ----------------
   buildGlows() {
-    const tex = glowSpriteTexture();
-    const buckets = new Map();
-    for (const g of this.map.glows) { const k = Math.round(g.s * 2) / 2; (buckets.get(k) || buckets.set(k, []).get(k)).push(g); }
-    for (const [size, list] of buckets) {
-      const geo = new THREE.BufferGeometry(), pos = [], col = [], c = new THREE.Color();
-      for (const g of list) { pos.push(g.x, g.y, g.z); c.set(g.c).multiplyScalar(g.a * 1.1); col.push(c.r, c.g, c.b); }
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      const mat = new THREE.PointsMaterial({ size: size * 1.0, map: tex, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false, fog: false, opacity: 0.4 });
-      const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; this.group.add(pts); this.glowPoints.push(pts);
-    }
+    const tex = glowSpriteTexture(), list = this.map.glows, n = list.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), c = new THREE.Color();
+    list.forEach((g, i) => { pos.set([g.x, g.y, g.z], i * 3); c.set(g.c).multiplyScalar(g.a * 1.1); col.set([c.r, c.g, c.b], i * 3); size[i] = g.s; });
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('aCol', new THREE.BufferAttribute(col, 3)); geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    this.glowU = { uMap: { value: tex }, uOp: { value: 0.1 }, uScale: { value: 360 } };
+    const mat = new THREE.ShaderMaterial({ uniforms: this.glowU, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      vertexShader: 'attribute vec3 aCol; attribute float aSize; uniform float uScale; varying vec3 vC; void main(){ vC = aCol; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_PointSize = aSize * uScale / max(0.1, -mv.z); gl_Position = projectionMatrix * mv; }',
+      fragmentShader: 'uniform sampler2D uMap; uniform float uOp; varying vec3 vC; void main(){ float a = texture2D(uMap, gl_PointCoord).a; gl_FragColor = vec4(vC, a * uOp); }' });
+    const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; pts.renderOrder = 2; this.group.add(pts); this.glowPoints = [pts];
   }
   buildLabels() {
     const cache = new Map();
@@ -329,11 +328,11 @@ export class WorldView {
           break;
         }
         case 'turbine': {
-          const rotor = new THREE.Group(); g.add(rotor);
-          for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.5, a.r, 0.14), white); b.position.y = a.r / 2; const pv = new THREE.Group(); pv.rotation.z = i * 2.094; pv.add(b); rotor.add(pv); b.castShadow = true; }
-          const hub = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), white); hub.position.x = 0; g.add(hub);
-          rotor.rotation.y = Math.PI / 2; const sp = 0.6 + this.rng() * 0.4, off = this.rng() * 6;
-          const holder = new THREE.Group(); holder.rotation.y = Math.PI / 2; g.remove(rotor); holder.add(rotor); rotor.rotation.y = 0; g.add(holder);
+          const rotor = new THREE.Group(), r = a.r, geos = [0, 1, 2].map(i => new THREE.BoxGeometry(0.5, r, 0.14).translate(0, r / 2, 0).rotateZ(i * 2.094));
+          const blades = new THREE.Mesh(mergeGeometries(geos), white); blades.castShadow = true; rotor.add(blades);
+          const hub = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), white); g.add(hub);
+          const holder = new THREE.Group(); holder.rotation.y = Math.PI / 2; holder.add(rotor); g.add(holder);
+          const sp = 0.6 + this.rng() * 0.4, off = this.rng() * 6;
           addA(g.position, (t) => { rotor.rotation.z = t * sp + off; }, 260);
           break;
         }
@@ -445,11 +444,11 @@ export class WorldView {
   // ---------------- Update ----------------
   setNight(n) {
     this.night = n; updateNight(this.M, n);
-    for (const p of this.glowPoints) p.material.opacity = 0.10 + 0.55 * n;
+    if (this.glowU) this.glowU.uOp.value = 0.10 + 0.55 * n;
     if (this.mushMat) this.mushMat.emissiveIntensity = n * 2.2;
   }
   update(dt, t, cam, focus) {
-    this.windU.value = t;
+    this.windU.value = t; if (this.glowU && this.pxScale) this.glowU.uScale.value = this.pxScale;
     this.cullT = (this.cullT || 0) - dt;
     if (this.cullT <= 0 && this.staticMeshes) { // Distanz-Culling großer Kacheln (Sichtweite aus den Grafikeinstellungen)
       this.cullT = 0.4; const vd = this.viewDist || 450;

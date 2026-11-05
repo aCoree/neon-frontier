@@ -41,10 +41,10 @@ export class Character {
   mesh(geo, mat, parent, x = 0, y = 0, z = 0, shadow = true) {
     const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; parent.add(m); return m;
   }
-  joint(parent, x = 0, y = 0, z = 0) { const g = new THREE.Group(); g.position.set(x, y, z); parent.add(g); return g; }
+  joint(parent, x = 0, y = 0, z = 0) { const g = new THREE.Bone(); g.position.set(x, y, z); parent.add(g); this.bones.push(g); return g; }
 
   build() {
-    this.mkMats();
+    this.bones = []; this.mkMats();
     const { mArmor: A, mSuit: S, mAccent: AC, mDark: D } = this;
     this.rig = this.joint(this.root);                         // Fall-/Ausweichdrehung um die Füße
     this.hips = this.joint(this.rig, 0, 0.92, 0);
@@ -114,20 +114,35 @@ export class Character {
     this.tmpMat = new THREE.Matrix4();
   }
 
-  // Draw-Calls sparen: Meshes mit gleichem Material pro Gelenk zu einem Mesh verschmelzen
+  // Draw-Calls sparen: alle starren Körperteile werden zu EINEM Skinned-Mesh pro Materialklasse verschmolzen (statt ~50 Einzelmeshes).
+  // Die Gelenke bleiben echte Bones – die bestehende Animation/IK steuert sie weiter über rotation/position.
   optimize() {
-    const groups = []; const walk = (o) => { if (o === this.anchor) return; if (o.isGroup) groups.push(o); for (const ch of o.children) walk(ch); }; walk(this.root);
-    for (const g of groups) {
-      const byMat = new Map();
-      for (const ch of [...g.children]) if (ch.isMesh && ch.geometry.index && !ch.userData.keep) { const a = byMat.get(ch.material) || byMat.set(ch.material, []).get(ch.material); a.push(ch); }
-      for (const [mat, list] of byMat) {
-        if (list.length < 2) continue;
-        const geos = list.map(m => { m.updateMatrix(); const ge = m.geometry.clone(); ge.applyMatrix4(m.matrix); for (const k of Object.keys(ge.attributes)) if (!['position', 'normal', 'uv'].includes(k)) ge.deleteAttribute(k); return ge; });
-        const merged = mergeGeometries(geos, false); if (!merged) continue;
-        const mesh = new THREE.Mesh(merged, mat); mesh.castShadow = list.some(m => m.castShadow); g.add(mesh);
-        for (const m of list) g.remove(m);
-        geos.forEach(ge => ge.dispose());
-      }
+    const root = this.root; root.updateMatrixWorld(true);
+    const inSkip = (o) => { for (let p = o; p; p = p.parent) if (p === this.anchor || p === this.scarf) return true; return false; };
+    const idx = new Map(this.bones.map((bn, i) => [bn, i]));
+    const groups = { armor: [], cloth: [], accent: [], visor: [] }, removed = [];
+    root.traverse(m => {
+      if (!m.isMesh || m.isSkinnedMesh || inSkip(m) || !idx.has(m.parent)) return;
+      const cls = m.material === this.mArmor ? 'armor' : m.material === this.mAccent ? 'accent' : m.material === this.mVisor ? 'visor' : 'cloth';
+      let ge = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone(); ge.applyMatrix4(m.matrixWorld); ge.deleteAttribute('uv');
+      const n = ge.attributes.position.count, bi = idx.get(m.parent), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), col = new Float32Array(n * 3), c = m.material.color;
+      for (let i = 0; i < n; i++) { si[i * 4] = bi; sw[i * 4] = 1; col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+      ge.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); ge.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+      if (cls === 'cloth') ge.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      groups[cls].push(ge); removed.push(m);
+    });
+    for (const m of removed) m.parent.remove(m);
+    const skeleton = new THREE.Skeleton(this.bones); skeleton.calculateInverses();
+    this.mCloth = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.2 });
+    const mats = { armor: this.mArmor, cloth: this.mCloth, accent: this.mAccent, visor: this.mVisor };
+    for (const [cls, list] of Object.entries(groups)) {
+      if (!list.length) continue;
+      const geo = mergeGeometries(list); list.forEach(x => x.dispose());
+      const sm = new THREE.SkinnedMesh(geo, mats[cls]);
+      root.add(sm); sm.bind(skeleton, new THREE.Matrix4());
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1.7); (this.skinned || (this.skinned = [])).push(geo);   // Culling-Kugel folgt dem Charakter (siehe update)
+      sm.frustumCulled = true; sm.castShadow = cls === 'armor' || cls === 'cloth';
+      sm.matrixAutoUpdate = false; sm.matrixWorldAutoUpdate = false; sm.matrixWorld.identity();   // Bones tragen bereits die Weltposition
     }
   }
 
@@ -196,6 +211,7 @@ export class Character {
 
   update(dt, s) {
     const R = this.root;
+    if (this.skinned) for (const g of this.skinned) g.boundingSphere.center.set(R.position.x, R.position.y + 1.0, R.position.z);
     this.spawnT = Math.min(1, this.spawnT + dt * 3);
     // ---------- Tod ----------
     if (!this.alive) {

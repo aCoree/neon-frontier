@@ -30,13 +30,25 @@ export class RemoteEnt {
     this.root.visible = false;
   }
   makePlate() {
-    const col = this.team >= 0 ? TEAMS[this.team].color : (this.info.bot ? '#ffd27a' : '#ffffff');
-    const m = new THREE.SpriteMaterial({ map: plateTexture(this.info.name, col, 'Lv ' + (this.info.level || 1)), transparent: true, depthTest: false, depthWrite: false, fog: false });
-    this.plate = new THREE.Sprite(m); this.plate.scale.set(1.9, 0.48, 1); this.plate.renderOrder = 10;
-    const bg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x000000, transparent: true, opacity: 0.55, depthTest: false, fog: false })); bg.scale.set(1.2, 0.1, 1); bg.position.set(0, -0.3, 0); bg.renderOrder = 10;
-    this.bar = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x4dff8a, transparent: true, depthTest: false, fog: false })); this.bar.scale.set(1.16, 0.065, 1); this.bar.center.set(0, 0.5); this.bar.position.set(-0.58, -0.3, 0); this.bar.renderOrder = 11;
-    this.shbar = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x4db8ff, transparent: true, depthTest: false, fog: false })); this.shbar.scale.set(1.16, 0.035, 1); this.shbar.center.set(0, 0.5); this.shbar.position.set(-0.58, -0.37, 0); this.shbar.renderOrder = 11;
-    this.plate.add(bg, this.bar, this.shbar); this.scene.add(this.plate); this.bg = bg;
+    this.plateCol = this.team >= 0 ? TEAMS[this.team].color : (this.info.bot ? '#ffd27a' : '#ffffff');
+    this.pc = document.createElement('canvas'); this.pc.width = 256; this.pc.height = 84; this.pctx = this.pc.getContext('2d');
+    this.ptex = new THREE.CanvasTexture(this.pc); this.ptex.colorSpace = THREE.SRGBColorSpace;
+    this.plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.ptex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+    this.plate.scale.set(1.9, 0.62, 1); this.plate.renderOrder = 10; this.plateKey = ''; this.scene.add(this.plate);
+  }
+  drawPlate(bars) {   // nur neu zeichnen, wenn sich Leben/Schild (gerundet) ändern
+    const hp = Math.round(this.hp / 4), sh = Math.round(this.shield / 4), key = bars ? hp + '|' + sh : 'n';
+    if (key === this.plateKey) return; this.plateKey = key;
+    const x = this.pctx; x.clearRect(0, 0, 256, 84);
+    x.font = '800 30px "Trebuchet MS", Arial, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = 'rgba(0,0,0,0.9)'; x.shadowBlur = 6; x.lineWidth = 5; x.strokeStyle = 'rgba(0,0,0,0.7)'; x.strokeText(this.info.name, 128, 22);
+    x.fillStyle = this.plateCol; x.fillText(this.info.name, 128, 22); x.shadowBlur = 0;
+    if (bars) {
+      x.fillStyle = 'rgba(0,0,0,0.55)'; x.fillRect(28, 46, 200, 20);
+      const hf = Math.max(0, Math.min(1, this.hp / 100)); x.fillStyle = this.hp > 50 ? '#4dff8a' : this.hp > 25 ? '#ffd24a' : '#ff4d4d'; x.fillRect(30, 48, 196 * hf, 11);
+      x.fillStyle = '#4db8ff'; x.fillRect(30, 61, 196 * Math.max(0, Math.min(1, this.shield / 100)), 4);
+    }
+    this.ptex.needsUpdate = true;
   }
   push(t, s) {
     this.buf.push({ t, ...s }); if (this.buf.length > 30) this.buf.shift();
@@ -62,7 +74,7 @@ export class RemoteEnt {
     if (dead && ch.alive) ch.die(0, 1); else if (!dead && !ch.alive) ch.revive();
     this.alive = !dead;
     const fl = c.fl;
-    if (c.w !== this.lastW && WEAPONS[c.w]) { ch.setWeapon(c.w); this.lastW = c.w; ctx.onRemoteSwap && ctx.onRemoteSwap(this); }
+    if (c.w !== this.lastW && WEAPONS[c.w]) { ch.setWeapon(c.w); this.lastW = c.w; this.cast = null; ctx.onRemoteSwap && ctx.onRemoteSwap(this); }
     const rel = !!(fl & FL.RELOAD); if (rel && !this.reloadWas) { const d = WEAPONS[c.w]; ch.reload(d.reload); ctx.onRemoteReload && ctx.onRemoteReload(this, d); } this.reloadWas = rel;
     const fx = Math.sin(yaw), fz = Math.cos(yaw);
     ch.update(dt, {
@@ -79,21 +91,27 @@ export class RemoteEnt {
     const showPlate = this.alive && this.visible && ctx.plateOK(this);
     this.plate.visible = showPlate;
     if (showPlate) {
-      this.plate.position.set(x, y + (fl & FL.CROUCH ? 1.85 : 2.3), z);
-      this.bar.scale.x = 1.16 * Math.max(0.001, this.hp / 100); this.bar.material.color.setHex(this.hp > 50 ? 0x4dff8a : this.hp > 25 ? 0xffd24a : 0xff4d4d);
-      this.shbar.scale.x = 1.16 * Math.max(0.001, this.shield / 100);
-      const d = ctx.camPos.distanceTo(this.root.position); const s = THREE.MathUtils.clamp(d * 0.12, 0.8, 3.0); this.plate.scale.set(1.9 * s * 0.75, 0.48 * s * 0.75, 1);
-      this.bar.position.x = -0.58; this.bg.visible = this.shbar.visible = this.bar.visible = ctx.showBars(this);
+      this.drawPlate(ctx.showBars(this));
+      this.plate.position.set(x, y + (fl & FL.CROUCH ? 1.9 : 2.35), z);
+      const d = ctx.camPos.distanceTo(this.root.position), s = THREE.MathUtils.clamp(d * 0.12, 0.8, 3.0) * 0.75; this.plate.scale.set(1.9 * s, 0.62 * s, 1);
     }
+    // Schatten ferner Charaktere sparen (weniger Draw Calls im Schatten-Pass)
+    const cast = this.root.position.distanceToSquared(ctx.camPos) < 45 * 45;
+    if (cast !== this.cast) { this.cast = cast; this.root.traverse(o => { if (o.isMesh) o.castShadow = cast; }); }
   }
   setVisible(v) { this.visible = v; this.root.visible = v; }
-  dispose() { this.scene.remove(this.root); this.scene.remove(this.plate); this.plate.material.map.dispose(); }
+  dispose() { this.scene.remove(this.root); this.scene.remove(this.plate); this.ptex.dispose(); }
 }
 
 // --------- Pickup-Ansichten ---------
 const KIND_COL = { weapon: 0xffd24a, ammo: 0xfff08a, cons: 0x6bff9a, power: 0xb36bff, gadget: 0x4de1ff, shard: 0x4de8ff };
 export class PickupView {
-  constructor(scene) { this.scene = scene; this.items = new Map(); this.t = 0; this.shared = {}; this.timer = 0; }
+  constructor(scene) {
+    this.scene = scene; this.items = new Map(); this.t = 0; this.shared = {}; this.timer = 0;
+    const mk = (geo, cap = 320) => { const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }), cap); m.count = 0; m.frustumCulled = false; m.renderOrder = 3; scene.add(m); return m; };
+    this.beams = mk(new THREE.CylinderGeometry(0.03, 0.34, 3.0, 10, 1, true)); this.rings = mk(new THREE.RingGeometry(0.42, 0.5, 28).rotateX(-Math.PI / 2));
+    this._m = new THREE.Matrix4(); this._c = new THREE.Color(); this._p = new THREE.Vector3(); this._q = new THREE.Quaternion(); this._s = new THREE.Vector3();
+  }
   mat(hex, k = 2) { return new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false }); }
   build(p) {
     const g = new THREE.Group(); const col = p.kind === 'weapon' ? (WEAPONS[p.item]?.color ?? 0xffd24a) : p.kind === 'ammo' ? new THREE.Color(AMMO[p.item]?.color || '#fff').getHex() : p.kind === 'cons' ? new THREE.Color(CONSUMABLES[p.item]?.color || '#fff').getHex() : p.kind === 'power' ? new THREE.Color(POWERUPS[p.item]?.color || '#fff').getHex() : p.kind === 'gadget' ? new THREE.Color(GADGETS[p.item]?.color || '#fff').getHex() : KIND_COL[p.kind];
@@ -113,30 +131,32 @@ export class PickupView {
       case 'gadget': { const o = new THREE.Mesh(new THREE.OctahedronGeometry(0.34), new THREE.MeshStandardMaterial({ color: 0x20262e, emissive: col, emissiveIntensity: 0.8, metalness: 0.8, roughness: 0.3 })); const r1 = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 6, 28), this.mat(col, 2)); r1.rotation.x = Math.PI / 2; body.add(o, r1); body.userData.base = 0.95; break; }
       case 'shard': { const o = new THREE.Mesh(new THREE.OctahedronGeometry(0.28), this.mat(0x4de8ff, 2.4)); o.scale.y = 1.6; body.add(o); body.userData.base = 1.0; break; }
     }
-    // Leuchtsäule + Boden-Ring
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.34, 3.0, 10, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: p.kind === 'shard' ? 0.22 : 0.14, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })); beam.position.y = 1.5; g.add(beam);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 28), new THREE.MeshBasicMaterial({ color: new THREE.Color(col).multiplyScalar(1.8), transparent: true, opacity: 0.85, side: THREE.DoubleSide, toneMapped: false, depthWrite: false })); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; g.add(ring);
-    g.position.set(p.x, p.y, p.z); g.userData = { p, body, ring, beam, ph: Math.random() * 6 };
+    g.position.set(p.x, p.y, p.z); g.userData = { p, body, ph: Math.random() * 6, col: new THREE.Color(col), a: p.kind === 'shard' ? 0.22 : 0.14 };
     body.position.y = body.userData.base ?? 0.8;
     return g;
   }
   add(p) { if (this.items.has(p.id)) return; const g = this.build(p); g.visible = false; this.scene.add(g); this.items.set(p.id, { g, on: true, p }); }
   setOn(id, on) { const it = this.items.get(id); if (it) it.on = on; }
   remove(id) { const it = this.items.get(id); if (!it) return; this.scene.remove(it.g); this.items.delete(id); }
-  clear() { for (const it of this.items.values()) this.scene.remove(it.g); this.items.clear(); }
+  clear() { for (const it of this.items.values()) this.scene.remove(it.g); this.items.clear(); this.beams.count = this.rings.count = 0; }
   update(dt, t, cam) {
     this.timer -= dt; const doVis = this.timer <= 0; if (doVis) this.timer = 0.2;
+    let n = 0; const m = this._m, c = this._c, P = this._p, Q = this._q, S = this._s;
     for (const it of this.items.values()) {
-      const g = it.g;
-      if (doVis) { const dx = it.p.x - cam.x, dz = it.p.z - cam.z, d = dx * dx + dz * dz; it.near = d < 45 * 45; g.visible = it.on && d < 85 * 85; it.far = d > 45 * 45; }
-      if (!g.visible) continue;
-      const u = g.userData;
-      if (!it.far) {
+      const g = it.g, u = g.userData;
+      if (doVis) { const dx = it.p.x - cam.x, dz = it.p.z - cam.z, d = dx * dx + dz * dz; it.beam = it.on && d < 120 * 120; g.visible = it.on && d < 50 * 50; it.far = d > 28 * 28; }
+      if (!it.beam) continue;
+      if (g.visible && !it.far) {
         u.body.rotation.y = t * 1.4 + u.ph; u.body.position.y = (u.body.userData.base ?? 0.8) + Math.sin(t * 2 + u.ph) * 0.09;
         if (u.body.userData.spin2) { u.body.userData.spin2[0].rotation.z = t * 2; u.body.userData.spin2[1].rotation.y = t * 1.6; }
-        u.ring.scale.setScalar(1 + Math.sin(t * 3 + u.ph) * 0.08);
       }
+      if (n >= 318) continue;
+      P.set(it.p.x, it.p.y + 1.5, it.p.z); S.set(1, 1, 1); m.compose(P, Q, S); this.beams.setMatrixAt(n, m); this.beams.setColorAt(n, c.copy(u.col).multiplyScalar(u.a));
+      const pulse = 1 + Math.sin(t * 3 + u.ph) * 0.08; P.set(it.p.x, it.p.y + 0.05, it.p.z); S.set(pulse, pulse, pulse); m.compose(P, Q, S); this.rings.setMatrixAt(n, m); this.rings.setColorAt(n, c.copy(u.col).multiplyScalar(1.5));
+      n++;
     }
+    this.beams.count = this.rings.count = n; this.beams.instanceMatrix.needsUpdate = this.rings.instanceMatrix.needsUpdate = true;
+    if (this.beams.instanceColor) this.beams.instanceColor.needsUpdate = this.rings.instanceColor.needsUpdate = true;
   }
 }
 

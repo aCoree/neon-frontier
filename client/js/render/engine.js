@@ -83,6 +83,7 @@ export class Engine {
     this.sky.u.uTime.value = this.time;
     this.sky.follow(this.camera.position, focus || this.camera.position);
     if (this.underground) { this.sky.sun.intensity = 0; this.sky.moon.intensity = 0; this.renderer.shadowMap.needsUpdate = false; this.scene.environmentIntensity = 0.3; this.sky.hemi.intensity = 0.6; }
+    this.view.pxScale = this.renderer.domElement.height * 0.5;
     this.view.update(dt, this.time, this.camera.position, focus);
     const t0 = performance.now(); this.post.render(dt); this.lastRenderMs = performance.now() - t0;
   }

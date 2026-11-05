@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { WSKINS, WEAPONS } from '../shared/defs.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const geoCache = new Map();
 const rbox = (w, h, d, r = 0.008) => { const k = `r${w}|${h}|${d}|${r}`; let g = geoCache.get(k); if (!g) { g = new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2.2, h / 2.2, d / 2.2)); geoCache.set(k, g); } return g; };
@@ -16,10 +17,28 @@ function mats(skin) {
   const body = new THREE.MeshStandardMaterial({ color: ws.tint ?? 0x2b3038, metalness: 0.75, roughness: 0.38 });
   const dark = new THREE.MeshStandardMaterial({ color: ws.tint ? new THREE.Color(ws.tint).multiplyScalar(0.55) : 0x15181c, metalness: 0.6, roughness: 0.5 });
   const grip = new THREE.MeshStandardMaterial({ color: 0x26211d, metalness: 0.1, roughness: 0.85 });
+  for (const x of [body, dark, grip]) x.userData.merge = 'lit';
   const m = { body, dark, grip, ws };
   matCache.set(k, m); return m;
 }
-const glowMat = (hex, k = 2.2) => new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false });
+const glowMat = (hex, k = 2.2) => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false }); m.userData.merge = 'glow'; return m; };
+const litVC = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.65, roughness: 0.45 });
+const glowVC = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+const bakeCache = new Map();
+// Statische Teile (gleiche Materialklasse) zu je einem Mesh zusammenfassen; bewegliche Teile (Magazin, Pumpe, Riegel, Klinge) und Sondermaterialien bleiben einzeln.
+function bake(g, key) {
+  const keep = new Set([g.userData.magMesh, g.userData.pump, g.userData.bolt, g.userData.blade]);
+  const lit = [], glow = [];
+  for (const m of g.children) { if (!m.isMesh || keep.has(m)) continue; const k = m.material.userData.merge; if (k === 'lit') lit.push(m); else if (k === 'glow') glow.push(m); }
+  let c = bakeCache.get(key);
+  if (!c) {
+    const make = (list) => { if (!list.length) return null; const geos = list.map(m => { m.updateMatrix(); const ge = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone(); ge.applyMatrix4(m.matrix); ge.deleteAttribute('uv'); const n = ge.attributes.position.count, arr = new Float32Array(n * 3), col = m.material.color; for (let i = 0; i < n; i++) { arr[i * 3] = col.r; arr[i * 3 + 1] = col.g; arr[i * 3 + 2] = col.b; } ge.setAttribute('color', new THREE.BufferAttribute(arr, 3)); return ge; }); const merged = mergeGeometries(geos, false); geos.forEach(x => x.dispose()); return merged; };
+    c = { lit: make(lit), glow: make(glow) }; bakeCache.set(key, c);
+  }
+  for (const m of [...lit, ...glow]) g.remove(m);
+  if (c.lit) { const m = new THREE.Mesh(c.lit, litVC); m.castShadow = true; g.add(m); }
+  if (c.glow) { const m = new THREE.Mesh(c.glow, glowVC); g.add(m); }
+}
 
 export function makeWeaponModel(id, wskinId = 'default') {
   const def = WEAPONS[id];
@@ -99,6 +118,7 @@ export function makeWeaponModel(id, wskinId = 'default') {
   }
   g.userData.mag = g.userData.mag || null; g.userData.magMesh = mag; g.userData.pump = pump; g.userData.bolt = bolt; g.userData.def = def;
   g.userData.muzzleLight = null;
+  bake(g, id + '|' + wskinId);
   return g;
 }
 

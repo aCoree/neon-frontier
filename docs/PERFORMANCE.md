@@ -34,10 +34,21 @@ Fazit: Bandbreite −52 %, RAM −27 % bei 100 Spielern, CPU etwa gleich (das Fi
 Ehrlich: Die Draw-Call-Reduktion ist **klein** (0–20 %, im Wald minimal schlechter wegen der zusätzlichen Bäume). Frametime war auf dem Testgerät vsync-begrenzt (8,3 ms bei 120 Hz), deshalb zeigen FPS-Zahlen hier keinen Unterschied. Heap ≈ 66–90 MB. Die echte Draw-Call-Senkung (Pickups/Charaktere batchen) ist noch offen (siehe unten).
 Neu und funktionsfähig getestet: FPS-Limit 30/60/120/unbegrenzt, dynamische Auflösung (0,55–1,0, UI bleibt scharf), Akku-Sparmodus (30 FPS, 75 % Auflösung, weniger Partikel/Schatten), Rendern pausiert bei unsichtbarem Tab, Audio wird dann suspendiert, lokale Simulation pausiert, Renderauflösung/Schatten/Partikel/Sichtweite einstellbar, Entwickler-Monitor (nur `?debug=1`, F3).
 
+### 3b. Draw-Call-Reduktion (Runde 2, Qualität „Mittel“, gleiche Testpunkte, Draw Calls min–max / Dreiecke max)
+| Ort | Runde 1 | Runde 2 |
+|---|---|---|
+| Plaza | 321–515 / 423k | 205–328 / 501k |
+| U-Bahn | 711 / 441k | 448–561 / 634k |
+| Wald | 500–732 / 907k | 259–354 / 828k |
+| Industrie | 413–672 / 436k | 256–375 / 382k |
+
+Was geändert wurde: Charaktere sind jetzt je **ein** SkinnedMesh pro Material (Rüstung/Stoff/Akzent/Visier) statt ~20 Einzelteile (Gelenke bleiben echte Bones, Animation/IK unverändert); Namensschild = 1 Sprite statt 3 Objekte; Pickups zeichnen Strahl und Ring über je ein InstancedMesh pro Typ; Waffenmodelle werden gebacken und gecacht (statische Teile je Material verschmolzen, bewegliche Teile wie Magazin/Pumpe/Klinge bleiben einzeln); Leuchtpunkte der Karte laufen über einen einzigen Points-Shader; Turbinen-Blätter sind je Rotor ein Mesh.
+Ehrlich: Draw Calls sinken je nach Ort um etwa 20–50 % gegenüber Runde 1. Die **Dreieckszahl steigt dafür teils** (Plaza +18 %, U-Bahn +44 %), weil Skinned-Meshes nicht mehr einzeln wegsortiert werden können; im Wald und in der Industrie sinkt sie leicht. Die Zahlen stammen aus einem einzelnen Testlauf auf einem Gerät (vsync-begrenzt), sie sind kein Garantiewert für andere Geräte. Optik wurde in Menü, Skins-Ansicht und im Match geprüft; keine Konsolenfehler.
+
 ## 4. Noch offen (ehrliche Prioritätenliste)
 | Problem | Ursache | Prio | Lösung |
 |---|---|---|---|
-| Draw Calls 400–700 | viele kleine Meshes (Pickups ~6 je Stück, Charaktere ~20 Teile, Animator-Objekte) | hoch | Pickups instanzieren, Charaktere LOD/Impostor, Schatten nur für nahe Objekte |
+| Draw Calls 200–560 | Rest: Karte (Distanz-Culling vorhanden), Animator-Objekte, Schatten-Pass | mittel | Schatten nur für nahe Objekte, weitere Animator-Teile verschmelzen |
 | Server-Limit auf Gratis-Hosting unbekannt | 0,1 CPU-Anteil bei Render Free | hoch | Mit `/metrics` im echten Betrieb messen; ggf. Starter-Plan (~7 $/Monat) |
 | Map-Streaming/Chunks | Welt wird einmal komplett gebaut (Distanz-Culling vorhanden, kein Nachladen) | mittel | erst nötig, wenn die Karte deutlich größer wird |
 | Server nicht Multi-Instanz-fähig | Räume leben im Prozess-Speicher | mittel | Gateway + Matchmaking-Service, Räume pro Instanz registrieren |
