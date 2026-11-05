@@ -1,0 +1,86 @@
+// Integrationstest für Konten/Admin/Moderation gegen ein echtes Postgres (PGlite, in-memory).
+// Aufruf: npm run test:accounts
+import assert from 'node:assert/strict';
+import WebSocket from 'ws';
+import { createApp } from './app.js';
+import { connectPglite, migrate } from './lib/db.js';
+import { applyMatchResult } from './lib/progression.js';
+
+const quiet = { log() {}, error: console.error };
+const db = await connectPglite(); await migrate(db); await migrate(db); // zweimal: Migration muss idempotent sein
+const app = createApp({ db, config: { ownerUsername: 'Aurelio', ownerCode: 'sekret-code-123' }, log: quiet });
+const port = await app.start(0), base = `http://localhost:${port}`;
+let passed = 0; const ok = (name) => { passed++; console.log('  ✓', name); };
+const call = async (method, path, body, token, headers = {}) => { const r = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined }); let j = {}; try { j = await r.json(); } catch {} return { s: r.status, ...j }; };
+const reg = (u, p = 'Passw0rd!x', extra = {}, ip) => call('POST', '/api/register', { username: u, password: p, ...extra }, null, ip ? { 'x-forwarded-for': ip } : {});
+const login = (u, p, ip) => call('POST', '/api/login', { username: u, password: p }, null, ip ? { 'x-forwarded-for': ip } : {});
+const wsHello = (msg) => new Promise((resolve) => { const ws = new WebSocket('ws://localhost:' + port); const got = []; ws.on('open', () => ws.send(JSON.stringify({ k: 'hello', ...msg }))); ws.on('message', (d) => { const m = JSON.parse(d); got.push(m); if (m.k === 'welcome' || m.k === 'err') resolve({ ws, m, got }); }); });
+
+console.log('Konten & Sicherheit');
+assert.equal((await call('GET', '/api/status')).accounts, true); ok('Status meldet aktive Konten');
+assert.equal((await call('GET', '/api/me')).s, 401); ok('Ohne Token: 401');
+const owner0 = await reg('Aurelio', 'Passw0rd!x'); assert.equal(owner0.s, 400); ok('Besitzer-Name ohne Code blockiert');
+for (const bad of ['admin', 'ab', 'a b c', 'Fuck_you', 'Hitler99']) assert.equal((await reg(bad, 'Passw0rd!x', {}, '9.9.9.' + bad.length)).s, 400); ok('Reservierte/ungültige/anstößige Namen abgelehnt');
+assert.equal((await reg('Gute_Namen', '123')).s, 400); assert.equal((await reg('Gute_Namen', 'password')).s, 400); ok('Schwache Passwörter abgelehnt');
+const ow = await reg('Aurelio', 'Passw0rd!x', { ownerCode: 'sekret-code-123' }, '1.1.1.1'); assert.equal(ow.s, 200); assert.equal(ow.user.role, 'OWNER'); ok('Besitzer mit geheimem Code registriert → OWNER');
+const a = await reg('Alice', 'Passw0rd!x', {}, '2.2.2.2'); assert.equal(a.s, 200); assert.equal(a.user.role, 'PLAYER'); assert.equal(a.user.stats.level, 1); ok('Spieler registriert (PLAYER, Level 1)');
+assert.equal((await reg('alice', 'Passw0rd!x', {}, '3.3.3.3')).s, 409); ok('Doppelter Name (Groß/Kleinschreibung egal) → 409');
+const hash = (await db.one("SELECT password_hash FROM users WHERE username_lower='alice'")).password_hash; assert.ok(hash.startsWith('scrypt$') && !hash.includes('Passw0rd')); ok('Passwort nur als scrypt-Hash gespeichert');
+const tokRow = await db.one('SELECT token_hash FROM sessions LIMIT 1'); assert.ok(tokRow.token_hash.length === 64 && tokRow.token_hash !== a.token); ok('Sitzungs-Token nur als Hash gespeichert');
+assert.equal((await login('Alice', 'falsch')).s, 401); const l1 = await login('alice', 'Passw0rd!x', '4.4.4.4'); assert.equal(l1.s, 200); ok('Login falsch/richtig');
+for (let i = 0; i < 8; i++) await login('Alice', 'falsch' + i, '5.5.5.5'); assert.equal((await login('Alice', 'Passw0rd!x', '5.5.5.5')).s, 429); ok('Konto-Sperre nach Fehlversuchen (Rate Limit)');
+assert.ok((await db.one("SELECT count(*)::int AS n FROM suspicious_events WHERE kind='login_failures'")).n >= 1); ok('Verdächtige Logins werden protokolliert');
+const rl = []; for (let i = 0; i < 7; i++) rl.push((await reg('Spam' + i, 'Passw0rd!x', {}, '6.6.6.6')).s); assert.ok(rl.includes(429)); ok('Registrierungs-Rate-Limit pro IP');
+const me = await call('GET', '/api/me', null, l1.token); assert.equal(me.user.username, 'Alice'); ok('/api/me mit Token');
+assert.equal((await call('POST', '/api/logout', {}, l1.token)).s, 200); assert.equal((await call('GET', '/api/me', null, l1.token)).s, 401); ok('Logout beendet die Sitzung');
+
+console.log('Rollen, Sperren, Meldungen');
+const bob = await reg('Bobby', 'Passw0rd!x', {}, '7.7.7.7'), mod = await reg('Moddy', 'Passw0rd!x', {}, '8.8.8.8');
+assert.equal((await call('GET', '/api/admin/players?q=a', null, bob.token)).s, 403); ok('Spieler hat keinen Admin-Zugriff');
+assert.equal((await call('POST', '/api/admin/role', { username: 'Moddy', role: 'MODERATOR' }, mod.token)).s, 403); ok('Spieler kann sich keine Rolle geben');
+assert.equal((await call('POST', '/api/admin/role', { username: 'Moddy', role: 'MODERATOR' }, ow.token)).s, 200); ok('Besitzer vergibt Moderator-Rolle');
+assert.equal((await call('POST', '/api/admin/ban', { username: 'Bobby', permanent: true, reason: 'x' }, mod.token)).s, 403); ok('Moderator kann nicht dauerhaft sperren');
+assert.equal((await call('POST', '/api/admin/ban', { username: 'Aurelio', minutes: 5, reason: 'x' }, mod.token)).s, 403); ok('Niemand sperrt den Besitzer');
+const s1 = await login('Bobby', 'Passw0rd!x', '7.7.7.8');
+assert.equal((await call('POST', '/api/admin/ban', { username: 'Bobby', minutes: 60, reason: 'Cheating' }, mod.token)).s, 200);
+assert.equal((await call('GET', '/api/me', null, s1.token)).s, 401); assert.equal((await login('Bobby', 'Passw0rd!x', '7.7.7.9')).s, 403); ok('Temporärer Bann: Sitzungen weg, Login verweigert');
+assert.equal((await call('POST', '/api/admin/unban', { username: 'Bobby' }, mod.token)).s, 200); assert.equal((await login('Bobby', 'Passw0rd!x', '7.7.7.10')).s, 200); ok('Unban');
+const aud = await call('GET', '/api/admin/audit', null, ow.token); assert.ok(aud.logs.some(x => x.action === 'ban_temporary' && x.actor_name === 'Moddy')); ok('Admin-Aktionen im Audit-Log');
+const al = await reg('Carol', 'Passw0rd!x', {}, '10.0.0.1');
+assert.equal((await call('POST', '/api/report', { target: 'Bobby', reason: 'Beleidigung im Chat', matchId: 'm1' }, al.token)).s, 200); assert.equal((await call('POST', '/api/report', { target: 'Bobby', reason: '' }, al.token)).s, 400);
+const reps = await call('GET', '/api/admin/reports', null, mod.token); assert.equal(reps.reports.length, 1); assert.equal((await call('POST', '/api/admin/reports/close', { id: reps.reports[0].id }, mod.token)).s, 200); ok('Report anlegen, Moderator sieht und schließt ihn');
+await call('POST', '/api/mute', { target: 'Bobby' }, al.token); assert.deepEqual((await call('GET', '/api/me', null, al.token)).mutes, ['Bobby']); ok('Mute wird gespeichert');
+const pl = await call('GET', '/api/admin/players?q=car', null, mod.token); assert.equal(pl.players[0].username, 'Carol'); assert.equal((await call('GET', "/api/admin/players?q=%27%3BDROP%20TABLE%20users%3B--", null, mod.token)).s, 200); ok('Spielersuche (Index-Prefix) + SQL-Injection wirkungslos');
+assert.ok((await db.one('SELECT count(*)::int n FROM users')).n >= 4);
+
+console.log('Fortschritt (server-autoritativ)');
+const uid = Number(al.user.id);
+const r1 = await applyMatchResult(db, uid, 'matchA', { kills: 5, deaths: 2, hs: 2, dmg: 600, won: true, secs: 200, humans: 2, ranked: true });
+assert.ok(r1.xp > 0 && r1.rankDelta > 0); const r2 = await applyMatchResult(db, uid, 'matchA', { kills: 99, deaths: 0, hs: 99, dmg: 9e9, won: true, secs: 200, humans: 2, ranked: true }); assert.equal(r2, null); ok('Match-Belohnung genau einmal (idempotent)');
+const st = await db.one('SELECT * FROM user_stats WHERE user_id=$1', [uid]); assert.equal(st.kills, 5); assert.equal(st.matches, 1); assert.ok(Number(st.xp) === r1.xp); ok('Statistiken stimmen mit einmaliger Belohnung überein');
+const r3 = await applyMatchResult(db, uid, 'matchB', { kills: 0, deaths: 9, hs: 0, dmg: 0, won: false, secs: 200, humans: 2, ranked: true }); assert.ok(r3.rankPoints >= 0); ok('Rang-Punkte fallen nie unter 0');
+assert.equal((await applyMatchResult(db, uid, 'matchC', { kills: 3, deaths: 0, hs: 0, dmg: 100, won: true, secs: 5, humans: 2, ranked: true })).xp, 0); ok('Zu kurze Matches geben keine XP');
+const rb = await applyMatchResult(db, uid, 'matchD', { kills: 3, deaths: 0, hs: 0, dmg: 100, won: true, secs: 100, humans: 1, ranked: true }); assert.equal(rb.rankDelta, 0); ok('Rang nur bei ≥ 2 echten Spielern (kein Bot-Farming)');
+await assert.rejects(db.query('UPDATE user_stats SET currency = -5 WHERE user_id=$1', [uid])); ok('Negative Währung per DB-Constraint unmöglich');
+
+console.log('Multiplayer-Anbindung');
+const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
+const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');
+w1.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa', bots: 4, timeLimit: 5 } }));
+await new Promise(r => setTimeout(r, 300)); w1.ws.send(JSON.stringify({ k: 'start' })); await new Promise(r => setTimeout(r, 500));
+const room = [...app.rooms.values()][0]; assert.equal(room.state, 'countdown'); room.matchStart = -200; room.T = 0; // 200 s "gespielt"
+const rewardP = new Promise(res => w1.ws.on('message', (d) => { const m = JSON.parse(d); if (m.k === 'reward') res(m); }));
+room.state = 'playing'; const me0 = [...room.ents.values()].find(e => e.member && e.member.userId); me0.kills = 4; room.endMatch();
+const rew = await Promise.race([rewardP, new Promise((_, rej) => setTimeout(() => rej(new Error('kein reward')), 4000))]); assert.ok(rew.xp > 0 && rew.level >= 1); ok('Match-Ende → Server vergibt XP und sendet "reward"');
+assert.equal(room.members.size, 1); w1.ws.close();
+assert.equal((await call('POST', '/api/admin/maintenance', { on: true }, ow.token)).s, 200);
+const gm = await wsHello({ name: 'Gast1' }); assert.equal(gm.m.code, 'maintenance'); const om = await wsHello({ token: ow.token }); assert.equal(om.m.k, 'welcome'); ok('Wartungsmodus sperrt Spieler aus, Besitzer darf rein');
+assert.equal((await call('GET', '/api/status')).maintenance, true); await call('POST', '/api/admin/maintenance', { on: false }, ow.token); om.ws.close();
+assert.equal((await call('POST', '/api/admin/flag', { key: 'chat', value: false }, mod.token)).s, 403); assert.equal((await call('POST', '/api/admin/flag', { key: 'chat', value: false }, ow.token)).s, 200); assert.equal((await call('GET', '/api/status')).flags.chat, false); await call('POST', '/api/admin/flag', { key: 'chat', value: true }, ow.token); ok('Feature-Flags: nur Admin/Owner');
+const kick = await wsHello({ token: (await login('Bobby', 'Passw0rd!x', '11.0.0.1')).token }); let kicked = false; kick.ws.on('message', (d) => { if (JSON.parse(d).k === 'kicked') kicked = true; });
+kick.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa' } })); await new Promise(r => setTimeout(r, 300));
+await call('POST', '/api/admin/ban', { username: 'Bobby', minutes: 5, reason: 'Test' }, ow.token); await new Promise(r => setTimeout(r, 300)); assert.ok(kicked); ok('Bann wirft den Spieler sofort aus dem laufenden Raum');
+const big = await fetch(base + '/api/login', { method: 'POST', body: 'x'.repeat(20000) }).then(r => r.status).catch(() => 0); assert.ok(big === 413 || big === 0 || big === 400); ok('Übergroße/ungültige Requests werden abgewiesen');
+
+console.log(`\n${passed} Tests bestanden`);
+await app.stop(); await db.close(); process.exit(0);

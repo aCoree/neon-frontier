@@ -13,6 +13,7 @@ import { RemoteEnt, PickupView, DroneView } from './entities.js';
 import { Progress } from './progress.js';
 import { audio } from './audio.js';
 import { FX } from '../render/fx.js';
+import { Account } from './account.js';
 
 const MENU_POS = { x: 3, y: 0.58, z: -93 };
 const KIND_COLORS = { concrete: 'concrete', metal: 'metal', wood: 'wood', dirt: 'dirt' };
@@ -57,7 +58,7 @@ export class Game {
   send(o) { if (this.net) this.net.send(o); }
 
   // =================== Netzwerk / Räume ===================
-  profile() { const d = Progress.d; return { name: d.name || 'Spieler', skin: d.skin, wskin: d.wskin, level: d.level }; }
+  profile() { const d = Progress.d; return { name: Account.user ? Account.user.username : (d.name || 'Spieler'), skin: d.skin, wskin: d.wskin, level: Account.user ? Account.user.stats.level : d.level, token: this.net && this.net.kind === 'local' ? undefined : (Account.user ? Account.token : undefined) }; }
   async connect(local, urlOverride) {
     this.disconnect();
     const p = this.profile();
@@ -83,6 +84,7 @@ export class Game {
     on('lost', () => { this.ui.toast('Verbindung verloren.', 'bad'); this.leaveToMenu(); });
     on('fix', (m) => { this.player.x = m.x; this.player.y = m.y; this.player.z = m.z; this.player.tpFlag = true; });
     on('inv', (m) => this.onInv(m));
+    on('reward', (m) => this.onReward(m));
     on('give', (m) => { this.combat.give(m); this.giveToast(m); });
     on('shard', (m) => { Progress.stat('shards'); this.stats.shards++; const u = Progress.addXP(60); this.ui.toast(`Daten-Kern gefunden! (${m.n}) +60 XP`, 'good'); if (Progress.d.stats.shards >= 5) this.achv('shards5'); this.afterXP(u); });
     on('pick', (m) => this.onPickEvent(m));
@@ -445,6 +447,9 @@ export class Game {
   }
   afterXP(ups) { if (ups && ups.length) { this.ui.levelUp(ups[ups.length - 1]); audio.levelUp(); for (const s of SKINS) if (s.level > ups[0] - ups.length && s.level <= ups[ups.length - 1]) this.ui.toast(`Neuer Skin freigeschaltet: ${s.name}`, 'good'); } this.ui.refreshProfile(); }
 
+  onReward(m) {
+    if (Account.user) { const old = Account.user.stats; Account.refresh().then(() => { this.ui.refreshProfile(); this.ui.showReward(m, old); }); }
+  }
   onEnd(ev) {
     if (this.matchEnded) return; this.matchEnded = true; this.ctrl = false; this.ctrlWanted = false;
     const me = this.ents.get(this.you); const myTeam = me?.info.team ?? -1;
@@ -454,6 +459,7 @@ export class Game {
       xp = 120 + st.kills * 35 + st.hs * 12 + Math.round(st.dmg / 25) + (won ? 280 : 0) + st.shards * 0 + Math.min(100, st.chests * 20);
       Progress.stat('matches'); if (won) { Progress.stat('wins'); this.achv('winner'); }
     }
+    if (Account.user && n_isOnline(this)) xp = 0;   // eingeloggt: XP/Rang vergibt der Server (Nachricht "reward")
     const ups = xp ? Progress.addXP(xp) : []; Progress.save();
     won ? audio.win() : audio.lose(); audio.musicStart('menu');
     this.input.unlock();
@@ -596,3 +602,5 @@ export class Game {
   }
   secretDuck() { const sp = this.map.secrets.find(s => s.id === 'duck'); return sp; }
 }
+
+function n_isOnline(game) { return !!(game.net && game.net.kind === 'ws'); }

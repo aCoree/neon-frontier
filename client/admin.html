@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEON FRONTIER – Admin</title><meta name="robots" content="noindex">
+<style>
+:root{--bg:#0a0f1c;--p:#121a2e;--l:#2a3a5c;--c:#7ee8ff;--t:#e8f2ff;--d:#8fa6c4;--bad:#ff4d6a;--good:#4dff8a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px/1.4 system-ui,sans-serif}
+header{display:flex;gap:14px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--l);background:var(--p)}header b{color:var(--c);letter-spacing:.12em}
+nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px}button,input,select{font:inherit;color:var(--t);background:#0d1424;border:1px solid var(--l);padding:6px 12px;border-radius:4px}
+button{cursor:pointer}button:hover{border-color:var(--c)}button.on{background:#1b3a55;border-color:var(--c)}button.bad{border-color:var(--bad)}
+main{padding:0 18px 40px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #1d2a47;font-size:14px;vertical-align:top}th{color:var(--d);font-weight:600}
+.card{background:var(--p);border:1px solid var(--l);padding:14px;max-width:360px;margin:60px auto}.err{color:var(--bad);min-height:20px}.mut{color:var(--d)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+code{background:#0d1424;padding:1px 5px;border-radius:3px}
+</style></head><body>
+<header><b>NEON FRONTIER · ADMIN</b><span class="mut" id="who"></span><span style="flex:1"></span><button id="out" style="display:none">Abmelden</button></header>
+<div id="login" class="card"><h3>Anmelden</h3><div class="row"><input id="u" placeholder="Benutzername" autocomplete="username"></div><div class="row"><input id="p" type="password" placeholder="Passwort" autocomplete="current-password"></div><div class="err" id="err"></div><button id="go">Anmelden</button><p class="mut">Nur Konten mit Rolle Moderator/Admin/Owner haben Zugriff. Alle Rechte werden vom Server geprüft.</p></div>
+<div id="app" style="display:none"><nav id="tabs"></nav><main id="main"></main></div>
+<script>
+const $ = (s) => document.querySelector(s);
+let server = ''; try { server = (JSON.parse(localStorage.getItem('neon_frontier_v1') || '{}').settings || {}).server || ''; } catch {}
+const params = new URLSearchParams(location.search); if (params.get('server')) server = params.get('server');
+const base = (server ? server.replace(/^ws/, 'http') : location.origin).replace(/\/$/, '');
+let token = localStorage.getItem('nf_token'), me = null, tab = 'players';
+const api = async (m, p, b) => { const r = await fetch(base + p, { method: m, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: b ? JSON.stringify(b) : undefined }); const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status }); return j; };
+const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); for (const k of kids) e.append(k); return e; };   // nur textContent → kein XSS
+const fmt = (d) => d ? new Date(d).toLocaleString('de-DE') : '–';
+const TABS = [['players', 'Spieler'], ['reports', 'Meldungen'], ['server', 'Server & Features'], ['suspicious', 'Verdächtig'], ['audit', 'Audit-Log']];
+async function start() {
+  try { me = (await api('GET', '/api/me')).user; } catch { me = null; }
+  if (!me || me.role === 'PLAYER') { $('#login').style.display = ''; $('#app').style.display = 'none'; if (me) $('#err').textContent = 'Keine Berechtigung für diesen Bereich.'; return; }
+  $('#login').style.display = 'none'; $('#app').style.display = ''; $('#who').textContent = me.username + ' (' + me.role + ')'; $('#out').style.display = '';
+  const t = $('#tabs'); t.replaceChildren(...TABS.map(([k, n]) => el('button', { textContent: n, className: k === tab ? 'on' : '', onclick: () => { tab = k; start(); } })));
+  const main = $('#main'); main.replaceChildren(); try { await VIEWS[tab](main); } catch (e) { main.append(el('p', { className: 'err', textContent: e.message })); }
+}
+const VIEWS = {
+  async players(m) {
+    const q = el('input', { placeholder: 'Benutzername (Anfang)…' }), tb = el('table'), go = async () => {
+      const { players } = await api('GET', '/api/admin/players?q=' + encodeURIComponent(q.value));
+      tb.replaceChildren(el('tr', {}, ...['Name', 'Rolle', 'Level', 'Matches', 'K/D', 'Rang-Pkt', 'Registriert', 'Status', 'Aktionen'].map(h => el('th', { textContent: h }))), ...players.map(p => {
+        const banned = p.ban_permanent || (p.banned_until && new Date(p.banned_until) > new Date());
+        const acts = el('td');
+        if (banned) acts.append(el('button', { textContent: 'Entsperren', onclick: async () => { await api('POST', '/api/admin/unban', { username: p.username }); go(); } }));
+        else { acts.append(el('button', { className: 'bad', textContent: 'Sperren (1 Tag)', onclick: async () => { const r = prompt('Grund?', 'Cheating'); if (r) { await api('POST', '/api/admin/ban', { username: p.username, minutes: 1440, reason: r }); go(); } } }));
+          if (me.role !== 'MODERATOR') acts.append(' ', el('button', { className: 'bad', textContent: 'Permanent', onclick: async () => { const r = prompt('Grund (dauerhafte Sperre)?'); if (r) { await api('POST', '/api/admin/ban', { username: p.username, permanent: true, reason: r }); go(); } } })); }
+        if (me.role === 'OWNER' && p.role !== 'OWNER') { const s = el('select'); for (const r of ['PLAYER', 'MODERATOR', 'ADMIN']) s.append(el('option', { value: r, textContent: r, selected: r === p.role })); s.onchange = async () => { await api('POST', '/api/admin/role', { username: p.username, role: s.value }); go(); }; acts.append(' ', s); }
+        return el('tr', {}, el('td', { textContent: p.username }), el('td', { textContent: p.role }), el('td', { textContent: p.level }), el('td', { textContent: p.matches }), el('td', { textContent: p.deaths ? (p.kills / p.deaths).toFixed(2) : p.kills }), el('td', { textContent: p.rank_points }), el('td', { textContent: fmt(p.created_at) }), el('td', { textContent: banned ? (p.ban_permanent ? 'PERMANENT: ' : 'bis ' + fmt(p.banned_until) + ': ') + (p.ban_reason || '') : 'ok' }), acts);
+      }));
+    };
+    q.onkeydown = (e) => { if (e.key === 'Enter') go(); }; m.append(el('div', { className: 'row' }, q, el('button', { textContent: 'Suchen', onclick: go })), tb); go();
+  },
+  async reports(m) {
+    const { reports } = await api('GET', '/api/admin/reports'); m.append(el('table', {}, el('tr', {}, ...['#', 'Gemeldet', 'Von', 'Grund', 'Match', 'Zeit', ''].map(h => el('th', { textContent: h }))), ...reports.map(r => el('tr', {}, el('td', { textContent: r.id }), el('td', { textContent: r.reported }), el('td', { textContent: r.reporter }), el('td', { textContent: r.reason }), el('td', { textContent: r.match_id || '–' }), el('td', { textContent: fmt(r.created_at) }), el('td', {}, el('button', { textContent: 'Schließen', onclick: async () => { await api('POST', '/api/admin/reports/close', { id: r.id }); start(); } }))))));
+    if (!reports.length) m.append(el('p', { className: 'mut', textContent: 'Keine offenen Meldungen.' }));
+  },
+  async server(m) {
+    if (me.role === 'MODERATOR') { m.append(el('p', { className: 'mut', textContent: 'Nur für Admins.' })); return; }
+    const s = await api('GET', '/api/admin/server'), x = s.metrics;
+    m.append(el('h3', { textContent: 'Status: ' + s.status }), el('pre', { textContent: `Spieler ${x.players} · Räume ${x.rooms} · Tick ${x.tickAvgMs} ms (max ${x.tickMaxMs}) · CPU ${x.cpuPct}% · RAM ${x.rssMB} MB · Out ${x.outKBps} KB/s · Fehler ${x.errors}` }));
+    m.append(el('div', { className: 'row' }, el('button', { className: s.flags.maintenance ? 'bad' : '', textContent: s.flags.maintenance ? 'Wartungsmodus AUS schalten' : 'Wartungsmodus EIN schalten', onclick: async () => { await api('POST', '/api/admin/maintenance', { on: !s.flags.maintenance }); start(); } })));
+    m.append(el('h3', { textContent: 'Feature-Flags' }), el('div', { className: 'row' }, ...Object.entries(s.flags).filter(([k]) => k !== 'maintenance').map(([k, v]) => el('button', { className: v ? 'on' : '', textContent: k + ': ' + (v ? 'AN' : 'AUS'), onclick: async () => { await api('POST', '/api/admin/flag', { key: k, value: !v }); start(); } }))));
+    m.append(el('h3', { textContent: 'Aktive Räume' }), el('table', {}, ...s.rooms.map(r => el('tr', {}, el('td', { textContent: r.code }), el('td', { textContent: r.state }), el('td', { textContent: r.mode }), el('td', { textContent: r.players + ' Spieler' })))));
+  },
+  async suspicious(m) {
+    if (me.role === 'MODERATOR') { m.append(el('p', { className: 'mut', textContent: 'Nur für Admins.' })); return; }
+    const { events } = await api('GET', '/api/admin/suspicious'); m.append(el('p', { className: 'mut', textContent: 'Ereignisse werden nur protokolliert – es gibt keine automatischen Sperren.' }), el('table', {}, el('tr', {}, ...['Zeit', 'Spieler', 'Art', 'Details'].map(h => el('th', { textContent: h }))), ...events.map(e => el('tr', {}, el('td', { textContent: fmt(e.created_at) }), el('td', { textContent: e.name || '–' }), el('td', { textContent: e.kind }), el('td', { textContent: e.detail || '' })))));
+  },
+  async audit(m) {
+    if (me.role === 'MODERATOR') { m.append(el('p', { className: 'mut', textContent: 'Nur für Admins.' })); return; }
+    const { logs } = await api('GET', '/api/admin/audit'); m.append(el('table', {}, el('tr', {}, ...['Zeit', 'Wer', 'Aktion', 'Ziel', 'Details'].map(h => el('th', { textContent: h }))), ...logs.map(e => el('tr', {}, el('td', { textContent: fmt(e.created_at) }), el('td', { textContent: e.actor_name }), el('td', { textContent: e.action }), el('td', { textContent: e.target || '' }), el('td', { textContent: e.detail || '' })))));
+  },
+};
+$('#go').onclick = async () => { $('#err').textContent = ''; try { const r = await api('POST', '/api/login', { username: $('#u').value, password: $('#p').value }); token = r.token; localStorage.setItem('nf_token', token); start(); } catch (e) { $('#err').textContent = e.message; } };
+$('#p').onkeydown = (e) => { if (e.key === 'Enter') $('#go').click(); };
+$('#out').onclick = async () => { try { await api('POST', '/api/logout', {}); } catch {} localStorage.removeItem('nf_token'); token = null; location.reload(); };
+start();
+</script></body></html>

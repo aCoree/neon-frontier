@@ -5,6 +5,7 @@ import { UI } from './ui/ui.js';
 import { Progress } from './game/progress.js';
 import { audio } from './game/audio.js';
 import { Perf } from './render/perf.js';
+import { Account } from './game/account.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -20,6 +21,7 @@ async function boot() {
   const engine = new Engine(canvas, params.get('q') || S.quality || 'high');
   const setP = (p, t) => { $('#load-bar').style.width = Math.round(p * 100) + '%'; $('#load-text').textContent = t; };
   await engine.init(setP);
+  await Promise.race([Account.init(), new Promise(r => setTimeout(r, 3500))]);   // Konten (optional): Server nicht erreichbar → Gast-Modus
   const game = new Game(engine, canvas); const ui = new UI(game); game.ui = ui; window.game = game;
   ui.init();
   audio.setVolumes({ master: S.master, music: S.music, sfx: S.sfx, ambient: S.ambient });

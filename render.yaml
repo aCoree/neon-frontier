@@ -1,4 +1,5 @@
-# Render.com Blueprint: einfaches Hosting des Multiplayer-Servers (kostenloser Plan möglich).
+# Render.com Blueprint: Multiplayer-Server (kostenloser Plan möglich).
+# Geheime Werte (DATABASE_URL, OWNER_REGISTER_CODE) trägst du im Render-Dashboard ein – sie stehen NICHT im Repository.
 services:
   - type: web
     name: neon-frontier
@@ -10,3 +11,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: OWNER_USERNAME
+        value: Aurelio
+      - key: DATABASE_URL
+        sync: false
+      - key: OWNER_REGISTER_CODE
+        sync: false

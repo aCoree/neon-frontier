@@ -7,13 +7,18 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "test": "node server/test.js",
+    "test": "node server/test.js && node server/test-accounts.js",
+    "test:accounts": "node server/test-accounts.js",
     "check": "node server/tools/mapcheck.mjs && node server/tools/walktest.mjs"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "pg": "^8.23.1",
     "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15"
   }
 }

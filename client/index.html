@@ -40,7 +40,9 @@
   <div class="profile-chip" id="profile-chip">
     <div class="pc-name" id="pc-name">Spieler</div>
     <div class="pc-lvl"><span id="pc-level">1</span><div class="pc-bar"><i id="pc-xp"></i></div><small id="pc-xptxt">0 / 0 XP</small></div>
-    <button class="link" id="pc-rename">Name ändern</button>
+    <div class="pc-rank" id="pc-rank"></div>
+    <div class="pc-acct"><button class="link" id="pc-rename">Name ändern</button> <button class="link" id="pc-login">Anmelden / Registrieren</button> <button class="link" id="pc-logout" style="display:none">Abmelden</button></div>
+    <div class="pc-since" id="pc-since"></div>
   </div>
 </section>
 
@@ -51,6 +53,21 @@
     <p class="sub">Wie sollen dich deine Freunde nennen?</p>
     <input id="name-input" maxlength="14" placeholder="Dein Name" autocomplete="off" spellcheck="false">
     <div class="row end"><button class="btn primary" id="name-ok">Los geht’s</button></div>
+  </div>
+</section>
+
+<!-- ================= KONTO ================= -->
+<section id="s-login" class="screen modal">
+  <div class="panel narrow">
+    <h2>Konto</h2>
+    <div class="seg" id="lg-mode"><button data-v="login" class="on">Anmelden</button><button data-v="register">Registrieren</button></div>
+    <div style="height:10px"></div>
+    <input id="lg-user" maxlength="16" placeholder="Benutzername" autocomplete="username" spellcheck="false">
+    <input id="lg-pass" type="password" maxlength="128" placeholder="Passwort (mind. 8 Zeichen)" autocomplete="current-password" style="margin-top:8px">
+    <input id="lg-owner" type="password" maxlength="64" placeholder="Besitzer-Code" autocomplete="off" style="margin-top:8px;display:none">
+    <div id="lg-err" class="hint" style="color:var(--bad);min-height:20px"></div>
+    <p class="hint">Mit Konto speichert der Server XP, Level und Rang. Ohne Konto spielst du als Gast. Dein Passwort wird nie im Klartext gespeichert.</p>
+    <div class="row end"><button class="btn" data-back>Abbrechen</button><button class="btn primary" id="lg-ok">Weiter</button></div>
   </div>
 </section>
 

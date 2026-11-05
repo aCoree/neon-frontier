@@ -14,7 +14,7 @@ const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr'
 
 export class Room {
   constructor(code, opts = {}) {
-    this.code = code; this.members = new Map(); this.ents = new Map(); this.state = 'lobby'; this.hostId = null;
+    this.hooks = opts.hooks || null; this.code = code; this.members = new Map(); this.ents = new Map(); this.state = 'lobby'; this.hostId = null;
     this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, ...(opts.settings || {}) };
     this.local = !!opts.local;
     this.T = 0; this.last = Date.now(); this.tickN = 0; this.ev = []; this.emptyAt = 0;
@@ -46,7 +46,7 @@ export class Room {
   // =============== Lobby ===============
   addMember(client, profile) {
     const id = idc++;
-    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
+    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, userId: profile.userId || null, role: profile.role || 'PLAYER', muted: new Set(), lastChat: 0, chatBurst: 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
     this.members.set(id, m);
     if (this.hostId == null || !this.members.get(this.hostId)?.connected) this.hostId = id;
     this.emptyAt = 0;
@@ -55,7 +55,7 @@ export class Room {
     return m;
   }
   lobbyData() {
-    return { k: 'lobby', code: this.code, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level })) };
+    return { k: 'lobby', code: this.code, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level, acct: m.userId ? 1 : 0 })) };
   }
   lobbyUpdate() { this.all(this.lobbyData()); }
   removeMember(m, hard = true) {
@@ -78,7 +78,15 @@ export class Room {
     m.lastSeen = Date.now();
     switch (msg.k) {
       case 'ping': if (typeof msg.rtt === 'number') m.rtt = clamp(lerp(m.rtt, msg.rtt, 0.3), 0.01, 1); this.send(m, { k: 'pong', t: msg.t, T: this.T }); return;
-      case 'chat': { const t = clean(msg.text, 140); if (t) this.all({ k: 'chat', id: m.id, from: m.name, team: m.ent ? m.ent.team : m.team, text: t }); return; }
+      case 'chat': {
+        if (this.hooks?.chatAllowed && !this.hooks.chatAllowed()) { this.send(m, { k: 'toast', text: 'Chat ist derzeit deaktiviert.' }); return; }
+        const now = Date.now(); m.chatBurst = Math.max(0, m.chatBurst - (now - m.lastChat) / 1500); m.lastChat = now;
+        if (++m.chatBurst > 4) { this.send(m, { k: 'toast', text: 'Nicht so schnell – Chat-Spam-Schutz.' }); return; }
+        let t = clean(msg.text, 140); if (!t) return; if (this.hooks?.filter) t = this.hooks.filter(t);
+        const out = { k: 'chat', id: m.id, from: m.name, team: m.ent ? m.ent.team : m.team, text: t };
+        for (const o of this.members.values()) if (!(m.userId && o.muted.has(String(m.userId)))) this.send(o, out);
+        return;
+      }
       case 'profile': m.name = clean(msg.name, 14) || m.name; m.skin = msg.skin || m.skin; m.wskin = msg.wskin || m.wskin; m.level = msg.level | 0; if (this.state === 'lobby') this.lobbyUpdate(); return;
       case 'set': return this.setSettings(m, msg.s || {});
       case 'team': return this.setTeam(m, msg.team | 0, msg.target);
@@ -165,6 +173,7 @@ export class Room {
       pts.forEach((p, i) => { const b = this.addBot(-1, { dummy: true, home: p }); b.dummy = true; });
     }
     for (const e of this.ents.values()) this.spawnEnt(e, true);
+    this.matchId = this.code + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     this.state = 'countdown'; this.startAt = this.T + (S.training ? 1.5 : 4);
     const limit = S.scoreLimit || mode.score; this.scoreLimit = limit; this.matchEnd = 0;
     this.nextSupply = this.startAt + 70; this.timeLimit = S.timeLimit * 60;
@@ -182,7 +191,7 @@ export class Room {
     });
     if (m.ent) this.sendInv(m.ent);
   }
-  entInfo(e) { return { id: e.id, name: e.name, skin: e.skin, wskin: e.wskin, team: e.team, bot: e.isBot ? 1 : 0, level: e.level, k: e.kills, d: e.deaths, sc: e.score, diff: e.diff }; }
+  entInfo(e) { return { id: e.id, name: e.name, skin: e.skin, wskin: e.wskin, team: e.team, bot: e.isBot ? 1 : 0, level: e.level, acct: e.member && e.member.userId ? 1 : 0, k: e.kills, d: e.deaths, sc: e.score, diff: e.diff }; }
   lateJoin(m) {
     const mode = MODES[this.settings.mode];
     if (this.state === 'ended') { this.send(m, { k: 'err', text: 'Das Match ist gerade zu Ende.' }); }
@@ -210,7 +219,7 @@ export class Room {
       id, name: o.name, skin: o.skin, wskin: o.wskin || 'default', team: o.team ?? -1, isBot: !!o.bot, member: o.member || null, level: o.level | 0,
       x: 0, y: 0, z: 0, yaw: 0, pitch: 0, fl: 0, w: 'viper', vx: 0, vy: 0, vz: 0, hp: 100, shield: 0, alive: false, respawnAt: 0,
       kills: 0, deaths: 0, score: 0, streak: 0, best: 0, hs: 0, dmgDealt: 0, owned: [...START_LOADOUT], cons: { medkit: 1, shieldpot: 0, grenade: 1, smoke: 0 }, gadget: null, gadCd: {},
-      lastFire: {}, power: {}, barrier: 0, barrierUntil: 0, spawnInv: 0, hist: [], shardSet: new Set(), chests: 0, lastUse: 0, crouch: false, reloadUntil: 0, lastSt: 0, beamAcc: {}, beamT: 0, dcInvuln: false, assists: {}, lastDmgFrom: null,
+      lastFire: {}, power: {}, barrier: 0, barrierUntil: 0, spawnInv: 0, hist: [], shardSet: new Set(), chests: 0, lastUse: 0, crouch: false, reloadUntil: 0, lastSt: 0, rateViol: 0, beamAcc: {}, beamT: 0, dcInvuln: false, assists: {}, lastDmgFrom: null,
     };
     this.ents.set(id, e); return e;
   }
@@ -265,7 +274,7 @@ export class Room {
     if (!isFinite(x + y + z)) return;
     const dt = Math.max(0.02, this.T - e.lastSt); e.lastSt = this.T;
     const d = Math.hypot(x - e.x, z - e.z);
-    if (this.state === 'playing' && !s.tp && d > Math.max(3, 40 * dt) && e.hist.length) { this.send(m, { k: 'fix', x: r2(e.x), y: r2(e.y), z: r2(e.z) }); return; }
+    if (this.state === 'playing' && !s.tp && d > Math.max(3, 40 * dt) && e.hist.length) { this.send(m, { k: 'fix', x: r2(e.x), y: r2(e.y), z: r2(e.z) }); this.hooks?.suspicious?.(m, 'movement', `dist=${d.toFixed(1)} dt=${dt.toFixed(2)}`); return; }
     if (this.state === 'countdown') return;
     e.vx = (x - e.x) / dt; e.vz = (z - e.z) / dt; e.vy = (y - e.y) / dt;
     e.x = clamp(x, -196, 196); e.y = clamp(y, -60, 200); e.z = clamp(z, -196, 196);
@@ -291,7 +300,7 @@ export class Room {
   fire(e, wid, o, d, seed, sp, rtt = 0) {
     if (!e.alive || this.state !== 'playing') return;
     const def = WEAPONS[wid]; if (!def || !e.owned.includes(wid)) return;
-    const last = e.lastFire[wid] ?? -9; if (this.T - last < (1 / def.rate) * 0.72) return;
+    const last = e.lastFire[wid] ?? -9; if (this.T - last < (1 / def.rate) * 0.72) { if (e.member && ++e.rateViol > 40) { e.rateViol = 0; this.hooks?.suspicious?.(e.member, 'firerate', wid); } return; }
     e.lastFire[wid] = this.T; e.w = wid; e.lastShot = this.T;
     if (!Array.isArray(o) || !Array.isArray(d)) return;
     let ox = +o[0], oy = +o[1], oz = +o[2]; const eye = e.y + (e.crouch ? 1.15 : 1.6);
@@ -514,6 +523,11 @@ export class Room {
     const board = ents.map(e => ({ id: e.id, name: e.name, team: e.team, bot: e.isBot ? 1 : 0, k: e.kills, d: e.deaths, hs: e.hs, dmg: Math.round(e.dmgDealt), best: e.best, chests: e.chests, shards: e.shardSet.size }));
     this.emit({ k: 'end', winTeam: winnerTeam, winId: winnerId, board });
     this.flush(true);
+    if (this.hooks?.matchEnd && !this.settings.training) {
+      const humans = [...this.ents.values()].filter(e => !e.isBot).length, secs = this.T - (this.matchStart || 0);
+      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: true }));
+      try { this.hooks.matchEnd(this, this.matchId, results); } catch (err) { console.error('[room] matchEnd-Hook', err); }
+    }
   }
 
   // =============== Pickups ===============

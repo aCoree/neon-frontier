@@ -6,6 +6,7 @@ import { QUALITY } from '../render/engine.js';
 import { Minimap } from './minimap.js';
 import { SERVER_URL } from '../config.js';
 import { resolveServerUrl } from '../game/net.js';
+import { Account } from '../game/account.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -27,6 +28,7 @@ export class UI {
     $('[data-act=private]').onclick = () => { audio.click(); this.createRoom(false); };
     $('#link-help').onclick = (e) => { e.preventDefault(); this.go('help'); };
     // Profil
+    this.initAccount();
     $('#pc-rename').onclick = () => { audio.click(); $('#name-input').value = Progress.d.name; this.go('name'); };
     $('#name-ok').onclick = () => { const n = $('#name-input').value.trim().slice(0, 14); if (n.length < 2) { this.toast('Bitte einen Namen mit mind. 2 Zeichen eingeben.', 'bad'); return; } Progress.d.name = n; Progress.save(); audio.click(); this.refreshProfile(); this.back(); this.afterName && this.afterName(); this.afterName = null; };
     $('#name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#name-ok').click(); });
@@ -99,12 +101,42 @@ export class UI {
 
   // ---------- Profil ----------
   refreshProfile() {
-    const d = Progress.d, need = xpForLevel(d.level);
-    $('#pc-name').textContent = d.name || 'Spieler'; $('#pc-level').textContent = d.level; $('#pc-xp').style.width = (100 * d.xp / need) + '%'; $('#pc-xptxt').textContent = `${d.xp} / ${need} XP`;
+    const d = Progress.d, u = Account.user;
+    if (u) {
+      const s = u.stats; $('#pc-name').textContent = u.username + (u.role !== 'PLAYER' ? ' · ' + u.role : ''); $('#pc-level').textContent = s.level; $('#pc-xp').style.width = (100 * s.xpInto / s.xpNeed) + '%'; $('#pc-xptxt').textContent = `${s.xpInto} / ${s.xpNeed} XP`;
+      $('#pc-rank').textContent = `${s.rank.toUpperCase()} · ${s.rankPoints} RP · K/D ${s.kd} · ${s.wins} Siege / ${s.matches} Matches`;
+      $('#pc-since').textContent = 'Konto seit ' + new Date(u.createdAt).toLocaleDateString('de-DE');
+    } else {
+      const need = xpForLevel(d.level);
+      $('#pc-name').textContent = (d.name || 'Spieler') + (Account.available ? ' (Gast)' : ''); $('#pc-level').textContent = d.level; $('#pc-xp').style.width = (100 * d.xp / need) + '%'; $('#pc-xptxt').textContent = `${d.xp} / ${need} XP`;
+      $('#pc-rank').textContent = ''; $('#pc-since').textContent = '';
+    }
+    $('#pc-rename').style.display = u ? 'none' : ''; $('#pc-logout').style.display = u ? '' : 'none'; $('#pc-login').style.display = !u && Account.available ? '' : 'none';
     $('#ach-count').textContent = `${Object.keys(d.ach).length} / ${ACHIEVEMENTS.length}`;
   }
-  ensureName(then) { if (!Progress.d.name) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
+  ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
 
+  initAccount() {
+    let mode = 'login'; const err = (t) => { $('#lg-err').textContent = t || ''; };
+    const ownerField = () => { $('#lg-owner').style.display = mode === 'register' && $('#lg-user').value.trim().toLowerCase() === 'aurelio' ? '' : 'none'; };
+    $$('#lg-mode button').forEach(b => b.onclick = () => { audio.click(); mode = b.dataset.v; $$('#lg-mode button').forEach(x => x.classList.toggle('on', x === b)); $('#lg-pass').autocomplete = mode === 'login' ? 'current-password' : 'new-password'; err(); ownerField(); });
+    $('#lg-user').oninput = ownerField;
+    const submit = async () => {
+      err(); const u = $('#lg-user').value.trim(), p = $('#lg-pass').value; if (!u || !p) return err('Bitte Benutzername und Passwort eingeben.');
+      $('#lg-ok').disabled = true;
+      try { if (mode === 'login') await Account.login(u, p); else await Account.register(u, p, $('#lg-owner').value); $('#lg-pass').value = ''; $('#lg-owner').value = ''; this.refreshProfile(); this.back(); this.toast('Willkommen, ' + Account.user.username + '!', 'good'); audio.levelUp(); }
+      catch (e) { err(e.status ? e.message : 'Server nicht erreichbar.'); audio.error(); }
+      $('#lg-ok').disabled = false;
+    };
+    $('#lg-ok').onclick = submit; $('#lg-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    $('#pc-login').onclick = () => { audio.click(); this.go('login'); setTimeout(() => $('#lg-user').focus(), 50); };
+    $('#pc-logout').onclick = async () => { audio.back(); await Account.logout(); this.refreshProfile(); this.toast('Abgemeldet.'); };
+  }
+  showReward(m, old) {
+    const s = Account.user.stats, box = $('#res-xp'); if (!box) return;
+    box.innerHTML = `<div class="big">+${m.xp} XP</div><div class="lvl">Level ${s.level}${s.level > old.level ? ' – LEVEL UP!' : ''} · Rang ${s.rank}${m.rankDelta ? ' (' + (m.rankDelta > 0 ? '+' : '') + m.rankDelta + ' RP)' : ''} · +${m.coins} Münzen</div><div class="xb"><i style="width:${100 * s.xpInto / s.xpNeed}%"></i></div>`;
+    if (s.level > old.level) { this.levelUp(s.level); audio.levelUp(); }
+  }
   // ---------- Solo / Training ----------
   buildSolo() {
     const holder = $('#solo-modes'); holder.innerHTML = '';
@@ -164,7 +196,7 @@ export class UI {
     this.g.net.on('joined', (m) => { if (this.cur !== 'lobby' && !this.g.inMatch) this.showScreenKeep('lobby'); });
     this.g.net.send({ k: 'join', code });
   }
-  onError(m) { if (m.code === 'noroom' || m.code === 'full') { this.g.disconnect(); if (this.cur === 'lobby') this.showScreen('menu'); } }
+  onError(m) { if (m.code === 'banned' || m.code === 'maintenance') { this.g.disconnect(); if (this.cur !== 'menu') this.showScreen('menu'); return; } if (m.code === 'noroom' || m.code === 'full') { this.g.disconnect(); if (this.cur === 'lobby') this.showScreen('menu'); } }
   copyInvite() {
     const code = this.g.roomCode; if (!code) return;
     const u = new URL(location.href); u.search = ''; u.hash = ''; u.searchParams.set('room', code);
@@ -313,9 +345,11 @@ export class UI {
     $('#res-banner').className = 'res-banner ' + (won ? 'win' : 'lose'); $('#res-banner').textContent = r.training ? 'TRAINING BEENDET' : won ? 'SIEG' : 'NIEDERLAGE';
     const wt = ev.winTeam >= 0 ? `Team ${TEAMS[ev.winTeam].name} gewinnt` : ev.winId ? `${esc(ents.get(ev.winId)?.info.name || '')} gewinnt` : 'Unentschieden';
     $('#res-sub').textContent = wt;
-    let html = '<table><tr><th></th><th>Spieler</th><th>K</th><th>T</th><th>Kopf</th><th>Schaden</th></tr>';
-    ev.board.forEach((b, i) => { const t = TEAMS[b.team]; html += `<tr class="${b.id === you ? 'me' : ''}"><td>${i + 1}</td><td style="color:${t ? t.color : 'inherit'}">${esc(ents.get(b.id)?.info.name || b.name)}</td><td>${b.k}</td><td>${b.d}</td><td>${b.hs}</td><td>${b.dmg}</td></tr>`; });
+    let html = '<table><tr><th></th><th>Spieler</th><th>K</th><th>T</th><th>Kopf</th><th>Schaden</th><th></th></tr>';
+    ev.board.forEach((b, i) => { const t = TEAMS[b.team]; html += `<tr class="${b.id === you ? 'me' : ''}"><td>${i + 1}</td><td style="color:${t ? t.color : 'inherit'}">${esc(ents.get(b.id)?.info.name || b.name)}</td><td>${b.k}</td><td>${b.d}</td><td>${b.hs}</td><td>${b.dmg}</td><td>${Account.user && b.id !== you && ents.get(b.id)?.info.acct ? `<button class="link" data-rep="${esc(b.name)}">Melden</button> <button class="link" data-mute="${esc(b.name)}">Stumm</button>` : ''}</td></tr>`; });
     $('#res-board').innerHTML = html + '</table>';
+    $$('#res-board [data-rep]').forEach(b => b.onclick = async () => { const why = prompt('Warum meldest du ' + b.dataset.rep + '? (z. B. Cheating, Beleidigung)'); if (!why) return; try { await Account.report(b.dataset.rep, why, this.g.lobby?.code); this.toast('Meldung gesendet. Danke!', 'good'); } catch (e) { this.toast(e.message, 'bad'); } });
+    $$('#res-board [data-mute]').forEach(b => b.onclick = async () => { try { await Account.mute(b.dataset.mute, true); this.g.send({ k: 'refreshmutes' }); this.toast(b.dataset.mute + ' ist stummgeschaltet.', 'good'); } catch (e) { this.toast(e.message, 'bad'); } });
     const d = Progress.d; const need = xpForLevel(d.level);
     $('#res-xp').innerHTML = `<div class="big">+${xp} XP</div><div class="lvl">${ups.length ? `LEVEL UP! → Level ${d.level}` : `Level ${d.level}`} · Abschüsse ${stats.kills} · Kopftreffer ${stats.hs}</div><div class="xb"><i style="width:${ups.length ? 8 : 100 * (d.xp - xp) / need}%"></i></div>`;
     setTimeout(() => { const i = $('#res-xp .xb i'); if (i) i.style.width = (100 * d.xp / need) + '%'; }, 80);
