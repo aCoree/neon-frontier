@@ -1,10 +1,11 @@
 // HTTP-API: Konten, Profile, Meldungen, Stummschalten, Admin-Funktionen. Alle Rechte werden serverseitig aus der Datenbank geprüft.
 import crypto from 'node:crypto';
 import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK } from './auth.js';
-import { rankOf, levelFromXp, RANKS } from './progression.js';
+import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
+import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
-export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: false, maintenance: false };
+export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, maintenance: false };
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
@@ -56,6 +57,62 @@ export class Api {
     const rank = rankOf(s.rank_points), next = RANKS.find(r => r.min > s.rank_points);
     return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, bestRank: rankOf(s.best_rank_points), nextRankAt: next ? next.min : null, currency: Number(s.currency) } };
   }
+  // ---------- Inventar / Shop / Tagesbelohnung (alles serverseitig, in Transaktionen) ----------
+  async inventory(user) {
+    await grantUnlocks(this.db, user.id, (await this.db.one('SELECT level FROM user_stats WHERE user_id=$1', [user.id])).level);
+    const owned = (await this.db.all('SELECT item_id FROM inventory WHERE user_id=$1', [user.id])).map(r => r.item_id);
+    const s = await this.db.one('SELECT currency, level, equipped_skin, equipped_wskin FROM user_stats WHERE user_id=$1', [user.id]);
+    const d = await this.db.one("SELECT streak, (last_claim = CURRENT_DATE) AS today, (last_claim = CURRENT_DATE - 1) AS yesterday FROM daily_rewards WHERE user_id=$1", [user.id]);
+    const streak = d ? (d.today || d.yesterday ? d.streak : 0) : 0;
+    return { owned, coins: Number(s.currency), level: s.level, equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin }, catalog: CATALOG.map(i => ({ id: i.id, type: i.type, name: i.name, level: i.level, price: i.price })),
+      daily: { enabled: !!this.flags.dailyRewards, canClaim: !!this.flags.dailyRewards && !(d && d.today), streak, nextDay: (streak % 7) + 1, rewards: DAILY_REWARDS } };
+  }
+  async buy(req, res, user) {
+    if (!this.flags.shop) return this.send(res, 503, { error: 'Der Shop ist gerade deaktiviert.' });
+    if (this.rl.hit('buy:' + user.id, 20, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
+    const b = await this.body(req), item = CATALOG_BY_ID[String(b.item)]; if (!item) return this.send(res, 400, { error: 'Unbekanntes Item.' });
+    const out = await this.db.tx(async (t) => {
+      const s = (await t.query('SELECT currency FROM user_stats WHERE user_id=$1 FOR UPDATE', [user.id])).rows[0];   // Zeilen-Sperre: parallele Käufe laufen nacheinander
+      if ((await t.query('SELECT 1 FROM inventory WHERE user_id=$1 AND item_id=$2', [user.id, item.id])).rows.length) return { code: 409, error: 'Du besitzt dieses Item bereits.' };
+      if (Number(s.currency) < item.price) return { code: 402, error: `Nicht genug Münzen (${item.price} nötig).` };
+      await t.query('UPDATE user_stats SET currency = currency - $2 WHERE user_id=$1', [user.id, item.price]);
+      await t.query("INSERT INTO inventory (user_id, item_id, source) VALUES ($1,$2,'shop')", [user.id, item.id]);
+      return { ok: true };
+    });
+    if (out.error) return this.send(res, out.code, { error: out.error });
+    this.send(res, 200, await this.inventory(user));
+  }
+  async equip(req, res, user) {
+    if (this.rl.hit('equip:' + user.id, 30, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
+    const b = await this.body(req); const skin = b.skin ? String(b.skin) : null, wskin = b.wskin ? String(b.wskin) : null;
+    for (const [id, type] of [[skin && 'skin:' + skin, 'skin'], [wskin && 'wskin:' + wskin, 'wskin']]) {
+      if (!id) continue; if (!CATALOG_BY_ID[id]) return this.send(res, 400, { error: 'Unbekanntes Item.' });
+      if (!(await this.db.one('SELECT 1 FROM inventory WHERE user_id=$1 AND item_id=$2', [user.id, id]))) return this.send(res, 403, { error: 'Du besitzt dieses Item nicht.' });
+    }
+    await this.db.query('UPDATE user_stats SET equipped_skin = COALESCE($2, equipped_skin), equipped_wskin = COALESCE($3, equipped_wskin) WHERE user_id=$1', [user.id, skin, wskin]);
+    this.send(res, 200, await this.inventory(user));
+  }
+  async claimDaily(res, user) {
+    if (!this.flags.dailyRewards) return this.send(res, 503, { error: 'Tagesbelohnungen sind gerade deaktiviert.' });
+    if (this.rl.hit('daily:' + user.id, 10, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
+    const out = await this.db.tx(async (t) => {
+      await t.query('INSERT INTO daily_rewards (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+      const d = (await t.query('SELECT streak, last_claim, (last_claim = CURRENT_DATE) AS today, (last_claim = CURRENT_DATE - 1) AS yesterday FROM daily_rewards WHERE user_id=$1 FOR UPDATE', [user.id])).rows[0];
+      if (d.today) return { code: 409, error: 'Die heutige Belohnung hast du schon abgeholt. Komm morgen wieder!' };
+      const streak = d.yesterday ? d.streak + 1 : 1, rw = DAILY_REWARDS[(streak - 1) % 7]; let coins = rw.coins || 0, xp = rw.xp || 0, item = null;
+      if (rw.item) {
+        const have = new Set((await t.query('SELECT item_id FROM inventory WHERE user_id=$1', [user.id])).rows.map(r => r.item_id));
+        const pool = CATALOG.filter(i => i.price > 0 && !have.has(i.id)); if (pool.length) { item = pool[Math.floor(Math.random() * pool.length)].id; await t.query("INSERT INTO inventory (user_id, item_id, source) VALUES ($1,$2,'daily')", [user.id, item]); } else coins += 300;
+      }
+      const s = (await t.query('SELECT xp FROM user_stats WHERE user_id=$1 FOR UPDATE', [user.id])).rows[0], total = Number(s.xp) + xp, lv = levelFromXp(total);
+      await t.query('UPDATE user_stats SET currency = currency + $2, xp = $3, level = $4 WHERE user_id=$1', [user.id, coins, total, lv.level]);
+      await grantUnlocks(t, user.id, lv.level);
+      await t.query('UPDATE daily_rewards SET last_claim = CURRENT_DATE, streak = $2 WHERE user_id=$1', [user.id, streak]);
+      return { ok: true, streak, day: ((streak - 1) % 7) + 1, coins, xp, item };
+    });
+    if (out.error) return this.send(res, out.code, { error: out.error });
+    this.send(res, 200, { reward: out, inventory: await this.inventory(user) });
+  }
   async createSession(userId, req) {
     const token = newToken();
     await this.db.query('INSERT INTO sessions (token_hash, user_id, expires_at, user_agent) VALUES ($1,$2, now() + ($3 || \' days\')::interval, $4)', [hashToken(token), userId, String(SESSION_DAYS), clip(req.headers['user-agent'], 120)]);
@@ -70,7 +127,7 @@ export class Api {
     try {
       const ip = this.ip(req);
       if (this.rl.hit('api:' + ip, 240, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' }), true;
-      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards } }), true;
+      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop } }), true;
       if (!this.db || !this.flags.accounts) return this.send(res, 503, { error: 'Konten sind auf diesem Server nicht aktiviert.' }), true;
       const m = req.method;
       if (m === 'POST' && url === '/api/register') return await this.register(req, res, ip), true;
@@ -86,6 +143,10 @@ export class Api {
         if (!t) return this.send(res, 404, { error: 'Spieler nicht gefunden.' }), true;
         return this.send(res, 200, { user: await this.publicUser(t) }), true;
       }
+      if (m === 'GET' && url === '/api/inventory') return this.send(res, 200, await this.inventory(user)), true;
+      if (m === 'POST' && url === '/api/shop/buy') return await this.buy(req, res, user), true;
+      if (m === 'POST' && url === '/api/equip') return await this.equip(req, res, user), true;
+      if (m === 'POST' && url === '/api/daily/claim') return await this.claimDaily(res, user), true;
       if (m === 'POST' && url === '/api/report') return await this.report(req, res, user), true;
       if (m === 'POST' && (url === '/api/mute' || url === '/api/unmute')) return await this.mute(req, res, user, url === '/api/mute'), true;
       if (url.startsWith('/api/admin/')) return await this.admin(req, res, url, user), true;
@@ -108,9 +169,10 @@ export class Api {
     try {
       user = await this.db.tx(async (t) => {
         const u = (await t.query('INSERT INTO users (username, username_lower, password_hash, role, last_login) VALUES ($1,$2,$3,$4, now()) RETURNING *', [username, username.toLowerCase(), hash, isOwner ? 'OWNER' : 'PLAYER'])).rows[0];
-        await t.query('INSERT INTO user_stats (user_id) VALUES ($1)', [u.id]); return u;
+        await t.query('INSERT INTO user_stats (user_id) VALUES ($1)', [u.id]); await grantUnlocks(t, u.id, 1); return u;
       });
     } catch (e) { if (e.code === '23505' || /unique/i.test(e.message)) return this.send(res, 409, { error: 'Dieser Benutzername ist schon vergeben.' }); throw e; }
+    await grantUnlocks(this.db, user.id, 1);
     await this.audit(user, 'register', username, isOwner ? 'owner' : '');
     this.send(res, 200, { token: await this.createSession(user.id, req), user: await this.publicUser(user) });
   }

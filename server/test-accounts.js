@@ -63,12 +63,38 @@ assert.equal((await applyMatchResult(db, uid, 'matchC', { kills: 3, deaths: 0, h
 const rb = await applyMatchResult(db, uid, 'matchD', { kills: 3, deaths: 0, hs: 0, dmg: 100, won: true, secs: 100, humans: 1, ranked: true }); assert.equal(rb.rankDelta, 0); ok('Rang nur bei ≥ 2 echten Spielern (kein Bot-Farming)');
 await assert.rejects(db.query('UPDATE user_stats SET currency = -5 WHERE user_id=$1', [uid])); ok('Negative Währung per DB-Constraint unmöglich');
 
+console.log('Inventar, Shop, Tagesbelohnung');
+const dave = await reg('Dave', 'Passw0rd!x', {}, '20.0.0.1'), dt = dave.token, did = Number(dave.user.id);
+const i0 = await call('GET', '/api/inventory', null, dt); assert.ok(i0.owned.includes('skin:vanguard') && i0.owned.includes('wskin:default') && !i0.owned.includes('skin:ember')); assert.equal(i0.coins, 0); ok('Neues Konto besitzt nur Standard-Cosmetics');
+assert.equal((await call('POST', '/api/shop/buy', { item: 'skin:ember' }, dt)).s, 402); assert.equal((await call('POST', '/api/shop/buy', { item: 'skin:gibtsnicht' }, dt)).s, 400); ok('Kauf ohne Münzen (402) / unbekanntes Item (400) abgelehnt');
+await db.query('UPDATE user_stats SET currency=1000 WHERE user_id=$1', [did]);
+const b1 = await call('POST', '/api/shop/buy', { item: 'skin:ember' }, dt); assert.equal(b1.s, 200); assert.equal(b1.coins, 1000 - 180); assert.ok(b1.owned.includes('skin:ember')); ok('Kauf zieht den Preis ab und gibt das Item');
+assert.equal((await call('POST', '/api/shop/buy', { item: 'skin:ember' }, dt)).s, 409); assert.equal(Number((await db.one('SELECT currency FROM user_stats WHERE user_id=$1', [did])).currency), 820); ok('Doppelkauf unmöglich (409), keine zweite Abbuchung');
+await db.query('UPDATE user_stats SET currency=1000 WHERE user_id=$1', [did]);
+const par = await Promise.all([call('POST', '/api/shop/buy', { item: 'skin:frost' }, dt), call('POST', '/api/shop/buy', { item: 'wskin:gold' }, dt)]);
+assert.deepEqual(par.map(x => x.s).sort(), [200, 402]); assert.ok(Number((await db.one('SELECT currency FROM user_stats WHERE user_id=$1', [did])).currency) >= 0); ok('Parallele Käufe über dem Guthaben: genau einer gelingt (Race-Condition-sicher)');
+await db.query('UPDATE user_stats SET currency=1000 WHERE user_id=$1', [did]);
+const par2 = await Promise.all([1, 2, 3].map(() => call('POST', '/api/shop/buy', { item: 'skin:phantom' }, dt))); assert.equal(par2.filter(x => x.s === 200).length, 1); ok('Gleichzeitiges Mehrfach-Kaufen desselben Items: nur 1× gebucht');
+assert.equal((await call('POST', '/api/equip', { skin: 'samurai' }, dt)).s, 403); const eq = await call('POST', '/api/equip', { skin: 'ember', wskin: 'default' }, dt); assert.equal(eq.s, 200); assert.equal(eq.equipped.skin, 'ember'); ok('Ausrüsten nur mit Besitz; Auswahl wird gespeichert');
+const wsd = await wsHello({ token: dt, skin: 'samurai', wskin: 'gold' }); wsd.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa' } })); await new Promise(r => setTimeout(r, 300));
+const rm = [...app.rooms.values()].find(r => [...r.members.values()].some(m => m.userId === did)); assert.equal([...rm.members.values()].find(m => m.userId === did).skin, 'ember'); wsd.ws.close(); ok('Im Spiel zählt der serverseitig ausgerüstete Skin – Client-Behauptung wird ignoriert');
+const d1 = await call('POST', '/api/daily/claim', {}, dt); assert.equal(d1.s, 200); assert.equal(d1.reward.day, 1); assert.equal(d1.reward.coins, 50); assert.equal((await call('POST', '/api/daily/claim', {}, dt)).s, 409); ok('Tagesbelohnung: einmal pro Tag, zweiter Versuch 409');
+const dpar = await Promise.all([1, 2, 3].map(() => call('POST', '/api/daily/claim', {}, dt))); assert.equal(dpar.filter(x => x.s === 200).length, 0); ok('Parallele Abholversuche ändern nichts');
+await db.query('UPDATE daily_rewards SET last_claim = CURRENT_DATE - 1 WHERE user_id=$1', [did]); const d2 = await call('POST', '/api/daily/claim', {}, dt); assert.equal(d2.reward.streak, 2); assert.equal(d2.reward.xp, 100); ok('Serie wächst bei täglichem Abholen (Tag 2 = XP)');
+await db.query('UPDATE daily_rewards SET last_claim = CURRENT_DATE - 3 WHERE user_id=$1', [did]); assert.equal((await call('POST', '/api/daily/claim', {}, dt)).reward.streak, 1); ok('Serie bricht nach verpasstem Tag ab');
+await db.query('UPDATE daily_rewards SET last_claim = CURRENT_DATE - 1, streak = 6 WHERE user_id=$1', [did]); const before = (await call('GET', '/api/inventory', null, dt)).owned.length; const d7 = await call('POST', '/api/daily/claim', {}, dt); assert.equal(d7.reward.day, 7); assert.ok(d7.reward.item && d7.inventory.owned.length === before + 1); ok('Tag 7 schenkt ein zufälliges noch nicht besessenes Cosmetic');
+await call('POST', '/api/admin/flag', { key: 'dailyRewards', value: false }, ow.token); await db.query('UPDATE daily_rewards SET last_claim = CURRENT_DATE - 1 WHERE user_id=$1', [did]); assert.equal((await call('POST', '/api/daily/claim', {}, dt)).s, 503); await call('POST', '/api/admin/flag', { key: 'dailyRewards', value: true }, ow.token); ok('Feature-Flag deaktiviert Tagesbelohnung ohne Neustart');
+const erin = await reg('Erin', 'Passw0rd!x', {}, '21.0.0.1'); const eid = Number(erin.user.id);
+await applyMatchResult(db, eid, 'big1', { kills: 50, deaths: 0, hs: 0, dmg: 0, won: true, secs: 120, humans: 1, ranked: false });
+assert.ok((await call('GET', '/api/inventory', null, erin.token)).owned.includes('skin:verdant')); ok('Level-Aufstieg schaltet Cosmetics automatisch frei (serverseitig)');
+assert.equal((await call('POST', '/api/equip', { skin: 'rogue' }, erin.token)).s, 403); ok('Gesperrte Cosmetics lassen sich nicht ausrüsten');
+
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
 const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');
 w1.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa', bots: 4, timeLimit: 5 } }));
 await new Promise(r => setTimeout(r, 300)); w1.ws.send(JSON.stringify({ k: 'start' })); await new Promise(r => setTimeout(r, 500));
-const room = [...app.rooms.values()][0]; assert.equal(room.state, 'countdown'); room.matchStart = -200; room.T = 0; // 200 s "gespielt"
+const room = [...app.rooms.values()].find(r => [...r.members.values()].some(m => m.userId === uid)); assert.equal(room.state, 'countdown'); room.matchStart = -200; room.T = 0; // 200 s "gespielt"
 const rewardP = new Promise(res => w1.ws.on('message', (d) => { const m = JSON.parse(d); if (m.k === 'reward') res(m); }));
 room.state = 'playing'; const me0 = [...room.ents.values()].find(e => e.member && e.member.userId); me0.kills = 4; room.endMatch();
 const rew = await Promise.race([rewardP, new Promise((_, rej) => setTimeout(() => rej(new Error('kein reward')), 4000))]); assert.ok(rew.xp > 0 && rew.level >= 1); ok('Match-Ende → Server vergibt XP und sendet "reward"');

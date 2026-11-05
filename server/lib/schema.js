@@ -61,4 +61,15 @@ export const MIGRATIONS = [
     CREATE TABLE IF NOT EXISTS seasons (id INT PRIMARY KEY, name TEXT NOT NULL, starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ);
     INSERT INTO seasons (id, name, starts_at) VALUES (1, 'Season 1', now()) ON CONFLICT DO NOTHING;
   ` },
+  { v: 3, name: 'inventory', sql: `
+    CREATE TABLE IF NOT EXISTS inventory (
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, item_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'level', acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (user_id, item_id)
+    );
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS equipped_skin TEXT NOT NULL DEFAULT 'vanguard';
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS equipped_wskin TEXT NOT NULL DEFAULT 'default';
+    CREATE TABLE IF NOT EXISTS daily_rewards (
+      user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, last_claim DATE, streak INT NOT NULL DEFAULT 0
+    );
+  ` },
 ];

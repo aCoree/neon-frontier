@@ -77,8 +77,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
         }
         if (api.maintenance && !(acct && can(acct.role, 'MODERATOR'))) { client.send({ k: 'err', code: 'maintenance', text: 'NEON FRONTIER wird gerade gewartet. Bitte später erneut versuchen.' }); client.close(); return; }
         if (acct) {
-          const s = await db.one('SELECT level FROM user_stats WHERE user_id=$1', [acct.id]);
-          profile = { name: acct.username, skin: msg.skin, wskin: msg.wskin, level: s ? s.level : 1, userId: Number(acct.id), role: acct.role };
+          const s = await db.one('SELECT level, equipped_skin, equipped_wskin FROM user_stats WHERE user_id=$1', [acct.id]);
+          profile = { name: acct.username, skin: s ? s.equipped_skin : 'vanguard', wskin: s ? s.equipped_wskin : 'default', level: s ? s.level : 1, userId: Number(acct.id), role: acct.role };
         } else {
           let name = String(msg.name || 'Gast').replace(/[^\w\- äöüÄÖÜß]/g, '').slice(0, 14) || 'Gast';
           if (db) { const clash = await db.one('SELECT 1 FROM users WHERE username_lower=$1', [name.toLowerCase()]); if (clash) name = name.slice(0, 11) + '_G' + Math.floor(Math.random() * 90 + 10); }

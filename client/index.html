@@ -41,7 +41,7 @@
     <div class="pc-name" id="pc-name">Spieler</div>
     <div class="pc-lvl"><span id="pc-level">1</span><div class="pc-bar"><i id="pc-xp"></i></div><small id="pc-xptxt">0 / 0 XP</small></div>
     <div class="pc-rank" id="pc-rank"></div>
-    <div class="pc-acct"><button class="link" id="pc-rename">Name ändern</button> <button class="link" id="pc-login">Anmelden / Registrieren</button> <button class="link" id="pc-logout" style="display:none">Abmelden</button></div>
+    <div class="pc-acct"><button class="link" id="pc-rename">Name ändern</button> <button class="link" id="pc-login">Anmelden / Registrieren</button> <button class="link" id="pc-daily" style="display:none;color:var(--c3)">🎁 Tagesbelohnung abholen</button> <button class="link" id="pc-logout" style="display:none">Abmelden</button></div>
     <div class="pc-since" id="pc-since"></div>
   </div>
 </section>
@@ -153,7 +153,7 @@
 <section id="s-skins" class="screen">
   <div class="skins-left panel">
     <header><button class="back" data-back>‹ Zurück</button><h2>Skins</h2></header>
-    <h4>Charaktere</h4><div class="skin-grid" id="skin-grid"></div>
+    <div class="hint" id="skin-coins"></div><h4>Charaktere</h4><div class="skin-grid" id="skin-grid"></div>
     <h4>Waffen-Skins</h4><div class="skin-grid small" id="wskin-grid"></div>
     <h4>Vorschau-Waffe</h4><div class="seg wrap" id="skin-weapon"></div>
     <p class="hint">Skins sind rein kosmetisch und geben keinen Vorteil. Neue Skins schaltest du durch Level-Aufstiege frei.</p>

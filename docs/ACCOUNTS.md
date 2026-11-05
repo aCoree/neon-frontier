@@ -34,10 +34,13 @@ Danach **Manual Deploy → Deploy latest commit**. In den Logs muss stehen: `[db
 * **Rollen:** OWNER > ADMIN > MODERATOR > PLAYER. Moderatoren: Spielersuche, Reports, Sperren bis 7 Tage. Admins: dauerhafte Sperren, Feature-Flags, Wartungsmodus, Audit, Server-Status. Nur der Owner vergibt Rollen. Niemand kann Gleich- oder Höherrangige sperren.
 * **Feature-Flags & Wartungsmodus:** serverseitig umschaltbar (`/admin.html` → Server & Features), ohne neuen Build.
 
+* **Inventar & Shop:** Besitz liegt serverseitig (Tabelle `inventory`). Level-Skins werden beim Aufstieg automatisch freigeschaltet, mit Münzen kann man sie früher kaufen (Skins `Level×90`, Waffen-Skins `Level×70`). Kauf läuft in einer Transaktion mit Zeilensperre: kein Doppelkauf, kein negatives Guthaben, auch nicht bei parallelen Anfragen. Im Match zählt immer der **serverseitig ausgerüstete** Skin.
+* **Tagesbelohnung:** einmal pro Tag (Serverdatum), 7-Tage-Zyklus (Münzen, XP, am Tag 7 ein zufälliges Cosmetic), Serie bricht bei verpasstem Tag ab. Abschaltbar über die Feature-Flags `dailyRewards` und `shop`.
+
 ## 5. Noch nicht gebaut (bewusst)
-Inventar, Cosmetics-Freischaltungen und Währungs-Ausgaben, tägliche Belohnungen, Freunde/Online-Status, Seasons-UI, Analytics, Backups/Restore-Werkzeuge, Emotes/Reactions, Profilbilder. Die Tabellen `seasons` und `feature_flags` sowie Spalten für Währung sind vorbereitet.
+Freunde/Online-Status, Seasons-UI, Analytics, Backups/Restore-Werkzeuge, Emotes/Reactions, Profilbilder. Die Tabellen `seasons` und `feature_flags` sowie Spalten für Währung sind vorbereitet.
 **Backups:** Supabase legt im Gratis-Plan keine Wiederherstellungs-Backups an. Bis das Backup-System gebaut ist: im Supabase-Dashboard regelmäßig *Database → Backups* prüfen bzw. mit `pg_dump` sichern.
 
 ## 6. Tests
-`npm run test:accounts` – 40 Integrationstests gegen echtes Postgres (PGlite): Registrierung, Login-Sperre, Passwort-Hash, Rollen, Sperren, Reports, Mutes, idempotente Belohnungen, Wartungsmodus, Flags, Bann-im-Match.
+`npm run test:accounts` – 56 Integrationstests gegen echtes Postgres (PGlite): Registrierung, Login-Sperre, Passwort-Hash, Rollen, Sperren, Reports, Mutes, idempotente Belohnungen, Wartungsmodus, Flags, Bann-im-Match, Shop (Doppelkauf/Race Conditions), Ausrüstung, Tagesbelohnung.
 `node server/tools/dev-pglite.mjs` startet lokal einen Server **mit** Konten (Daten nur im Speicher).

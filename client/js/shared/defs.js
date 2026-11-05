@@ -138,3 +138,12 @@ export const LOOT = {
   t3: [['weapon', 'stormcaller'], ['weapon', 'lancer'], ['weapon', 'longshot'], ['power', 'barrier'], ['gadget', 'jetpack'], ['gadget', 'drone'], ['gadget', 'teleporter'], ['weapon', 'pulse']],
 };
 export const AMMO_GIVE = { light: 60, shells: 12, sniper: 10, rockets: 4, energy: 80 };
+
+// ---- Shop-Katalog (Cosmetics): Server prüft Besitz & Preis, der Client zeigt nur an ----
+export const CATALOG = [
+  ...SKINS.map(s => ({ id: 'skin:' + s.id, type: 'skin', ref: s.id, name: s.name, level: s.level, price: s.level <= 1 ? 0 : s.level * 90 })),
+  ...WSKINS.map(s => ({ id: 'wskin:' + s.id, type: 'wskin', ref: s.id, name: s.name, level: s.level, price: s.level <= 1 ? 0 : s.level * 70 })),
+];
+export const CATALOG_BY_ID = Object.fromEntries(CATALOG.map(i => [i.id, i]));
+export const DEFAULT_ITEMS = ['skin:vanguard', 'wskin:default'];
+export const DAILY_REWARDS = [{ coins: 50 }, { xp: 100 }, { coins: 75 }, { coins: 100 }, { xp: 200 }, { coins: 150 }, { coins: 300, item: true }];

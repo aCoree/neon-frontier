@@ -1,5 +1,5 @@
 // Server-autoritative Fortschrittsberechnung: XP, Level, Rang. Der Client darf nichts davon selbst festlegen.
-import { xpForLevel } from '../../client/js/shared/defs.js';
+import { xpForLevel, CATALOG, DEFAULT_ITEMS } from '../../client/js/shared/defs.js';
 
 export const RANKS = [
   { name: 'Bronze', min: 0 }, { name: 'Silver', min: 100 }, { name: 'Gold', min: 250 },
@@ -18,6 +18,12 @@ export function reward(stat) {
   return { xp, rankDelta };
 }
 
+// Gewährt alle Cosmetics, deren Level erreicht ist (idempotent, kann beliebig oft aufgerufen werden).
+export async function grantUnlocks(q, userId, level) {
+  const ids = [...new Set([...DEFAULT_ITEMS, ...CATALOG.filter(i => i.level <= level).map(i => i.id)])];
+  for (const id of ids) await q.query("INSERT INTO inventory (user_id, item_id, source) VALUES ($1,$2,'level') ON CONFLICT DO NOTHING", [userId, id]);
+}
+
 // Idempotent: (match_id, user_id) ist Primärschlüssel – ein Match kann nie doppelt belohnt werden.
 export async function applyMatchResult(db, userId, matchId, stat) {
   const r = reward(stat);
@@ -30,6 +36,7 @@ export async function applyMatchResult(db, userId, matchId, stat) {
     await t.query(`UPDATE user_stats SET xp=$2, level=$3, kills=kills+$4, deaths=deaths+$5, headshots=headshots+$6, matches=matches+1, wins=wins+$7,
       rank_points=$8, best_rank_points=GREATEST(best_rank_points,$8), currency=currency+$9 WHERE user_id=$1`,
       [userId, xp, lv.level, stat.kills, stat.deaths, stat.hs, stat.won ? 1 : 0, rp, coins]);
+    await grantUnlocks(t, userId, lv.level);
     return { xp: r.xp, rankDelta: r.rankDelta, totalXp: xp, level: lv.level, into: lv.into, need: lv.need, rankPoints: rp, rank: rankOf(rp), coins };
   });
 }

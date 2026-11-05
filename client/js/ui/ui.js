@@ -1,5 +1,5 @@
 // Benutzeroberfläche: Menüs, Lobby, HUD, Ergebnis, Einstellungen, Skins, Erfolge.
-import { MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel } from '../shared/defs.js';
+import { CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel } from '../shared/defs.js';
 import { Progress } from '../game/progress.js';
 import { audio } from '../game/audio.js';
 import { QUALITY } from '../render/engine.js';
@@ -68,7 +68,7 @@ export class UI {
     $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; if (name) $('#' + (name === 'hud' ? 'hud' : 's-' + name)).classList.add('show');
     if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); }
-    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); }
+    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -85,7 +85,7 @@ export class UI {
     const modal = name === 'name' || name === 'help';
     if (!modal) $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; $('#s-' + name).classList.add('show');
-    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); }
+    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -104,13 +104,14 @@ export class UI {
     const d = Progress.d, u = Account.user;
     if (u) {
       const s = u.stats; $('#pc-name').textContent = u.username + (u.role !== 'PLAYER' ? ' · ' + u.role : ''); $('#pc-level').textContent = s.level; $('#pc-xp').style.width = (100 * s.xpInto / s.xpNeed) + '%'; $('#pc-xptxt').textContent = `${s.xpInto} / ${s.xpNeed} XP`;
-      $('#pc-rank').textContent = `${s.rank.toUpperCase()} · ${s.rankPoints} RP · K/D ${s.kd} · ${s.wins} Siege / ${s.matches} Matches`;
+      $('#pc-rank').textContent = `${s.rank.toUpperCase()} · ${s.rankPoints} RP · K/D ${s.kd} · ${s.wins} Siege / ${s.matches} Matches · ${s.currency} Münzen`;
       $('#pc-since').textContent = 'Konto seit ' + new Date(u.createdAt).toLocaleDateString('de-DE');
     } else {
       const need = xpForLevel(d.level);
       $('#pc-name').textContent = (d.name || 'Spieler') + (Account.available ? ' (Gast)' : ''); $('#pc-level').textContent = d.level; $('#pc-xp').style.width = (100 * d.xp / need) + '%'; $('#pc-xptxt').textContent = `${d.xp} / ${need} XP`;
       $('#pc-rank').textContent = ''; $('#pc-since').textContent = '';
     }
+    const dl = Account.inv && Account.inv.daily; $('#pc-daily').style.display = u && dl && dl.enabled && dl.canClaim ? '' : 'none';
     $('#pc-rename').style.display = u ? 'none' : ''; $('#pc-logout').style.display = u ? '' : 'none'; $('#pc-login').style.display = !u && Account.available ? '' : 'none';
     $('#ach-count').textContent = `${Object.keys(d.ach).length} / ${ACHIEVEMENTS.length}`;
   }
@@ -130,6 +131,10 @@ export class UI {
     };
     $('#lg-ok').onclick = submit; $('#lg-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
     $('#pc-login').onclick = () => { audio.click(); this.go('login'); setTimeout(() => $('#lg-user').focus(), 50); };
+    $('#pc-daily').onclick = async () => {
+      try { const r = await Account.claimDaily(); audio.levelUp(); this.refreshProfile(); const part = [r.coins ? r.coins + ' Münzen' : '', r.xp ? r.xp + ' XP' : '', r.item ? 'Cosmetic: ' + CATALOG_BY_ID[r.item].name : ''].filter(Boolean).join(' + '); this.toast(`Tag ${r.day}: ${part} (Serie ${r.streak})`, 'good'); }
+      catch (e) { this.toast(e.message, 'bad'); }
+    };
     $('#pc-logout').onclick = async () => { audio.back(); await Account.logout(); this.refreshProfile(); this.toast('Abgemeldet.'); };
   }
   showReward(m, old) {
@@ -282,18 +287,28 @@ export class UI {
     for (const id of ['striker', 'viper', 'hornet', 'breaker', 'marksman', 'longshot', 'stormcaller', 'pulse', 'lancer', 'blade', 'magnum']) { const b = document.createElement('button'); b.textContent = WEAPONS[id].name; b.dataset.v = id; b.onclick = () => { audio.click(); Progress.d.menuWeapon = id; Progress.save(); this.g.menuChar && this.g.menuChar.setWeapon(id); this.refreshSkins(); }; wsel.appendChild(b); }
   }
   refreshSkins() {
-    const d = Progress.d, grid = $('#skin-grid'), wgrid = $('#wskin-grid'); grid.innerHTML = ''; wgrid.innerHTML = '';
+    const d = Progress.d, inv = Account.user ? Account.inv : null, grid = $('#skin-grid'), wgrid = $('#wskin-grid'); grid.innerHTML = ''; wgrid.innerHTML = '';
+    const owned = (type, id) => inv ? inv.owned.includes(type + ':' + id) : (type === 'skin' ? Progress.skinUnlocked(id) : Progress.wskinUnlocked(id));
+    const eq = { skin: inv ? inv.equipped.skin : d.skin, wskin: inv ? inv.equipped.wskin : d.wskin };
+    $('#skin-coins').textContent = inv ? `Münzen: ${inv.coins} · Level-Skins sind gratis, mit Münzen kannst du früher kaufen.` : (Account.available ? 'Melde dich an, um Skins zu kaufen und serverseitig zu speichern.' : '');
+    const label = (type, s) => { const it = CATALOG_BY_ID[type + ':' + s.id]; if (owned(type, s.id)) return eq[type] === s.id ? 'Ausgewählt' : 'Im Besitz'; return inv ? `${it.price} Münzen · Lv ${s.level}` : (type === 'wskin' && s.id === 'gold' ? 'Lv ' + s.level + ' oder Ente' : 'Level ' + s.level); };
+    const act = async (type, s) => {
+      const id = type + ':' + s.id;
+      if (owned(type, s.id)) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.refreshSkins(); return; }
+      if (!inv) { audio.error(); this.toast(`${s.name}: erreiche Level ${s.level} (oder melde dich an, um zu kaufen).`, 'bad'); return; }
+      const price = CATALOG_BY_ID[id].price;
+      if (!confirm(`${s.name} für ${price} Münzen kaufen?`)) return;
+      try { await Account.buy(id); audio.levelUp(); this.toast(s.name + ' gekauft!', 'good'); this.refreshProfile(); this.refreshSkins(); } catch (e) { audio.error(); this.toast(e.message, 'bad'); }
+    };
     for (const s of SKINS) {
-      const ok = Progress.skinUnlocked(s.id), el = document.createElement('div'); el.className = 'skin' + (d.skin === s.id ? ' on' : '') + (ok ? '' : ' lock');
-      el.innerHTML = `<div class="sw"><i style="background:${s.armor}"></i><i style="background:${s.suit}"></i><i style="background:${s.accent}"></i></div><b>${s.name}</b><small>${ok ? (d.skin === s.id ? 'Ausgewählt' : 'Freigeschaltet') : 'Level ' + s.level}</small>`;
-      el.onclick = () => { if (!ok) { audio.error(); this.toast(`Erreicht Level ${s.level}, um ${s.name} freizuschalten.`, 'bad'); return; } audio.click(); d.skin = s.id; Progress.save(); this.g.refreshMenuChar(); this.refreshSkins(); };
-      grid.appendChild(el);
+      const ok = owned('skin', s.id), el = document.createElement('div'); el.className = 'skin' + (eq.skin === s.id ? ' on' : '') + (ok ? '' : ' lock');
+      el.innerHTML = `<div class="sw"><i style="background:${s.armor}"></i><i style="background:${s.suit}"></i><i style="background:${s.accent}"></i></div><b>${s.name}</b><small>${label('skin', s)}</small>`;
+      el.onclick = () => act('skin', s); grid.appendChild(el);
     }
     for (const s of WSKINS) {
-      const ok = Progress.wskinUnlocked(s.id), el = document.createElement('div'); el.className = 'skin' + (d.wskin === s.id ? ' on' : '') + (ok ? '' : ' lock');
-      el.innerHTML = `<div class="sw"><i style="background:${s.tint ? '#' + s.tint.toString(16).padStart(6, '0') : '#2b3038'}"></i><i style="background:${s.glow ? '#' + s.glow.toString(16).padStart(6, '0') : '#ffd24a'}"></i></div><b>${s.name}</b><small>${ok ? '' : s.id === 'gold' ? 'Lv ' + s.level + ' oder Ente' : 'Level ' + s.level}</small>`;
-      el.onclick = () => { if (!ok) { audio.error(); this.toast(`Waffen-Skin „${s.name}“ ist noch gesperrt.`, 'bad'); return; } audio.click(); d.wskin = s.id; Progress.save(); this.g.refreshMenuChar(); this.refreshSkins(); };
-      wgrid.appendChild(el);
+      const ok = owned('wskin', s.id), el = document.createElement('div'); el.className = 'skin' + (eq.wskin === s.id ? ' on' : '') + (ok ? '' : ' lock');
+      el.innerHTML = `<div class="sw"><i style="background:${s.tint ? '#' + s.tint.toString(16).padStart(6, '0') : '#2b3038'}"></i><i style="background:${s.glow ? '#' + s.glow.toString(16).padStart(6, '0') : '#ffd24a'}"></i></div><b>${s.name}</b><small>${label('wskin', s)}</small>`;
+      el.onclick = () => act('wskin', s); wgrid.appendChild(el);
     }
     $$('#skin-weapon button').forEach(b => b.classList.toggle('on', b.dataset.v === (d.menuWeapon || 'striker')));
   }
