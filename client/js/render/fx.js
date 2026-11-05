@@ -90,9 +90,9 @@ export class FX {
     for (let i = 0; i < 6; i++) { const m = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40), new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false })); m.visible = false; m.userData = { t: 0, dur: 0.5, r: 5 }; scene.add(m); this.rings.push(m); }
     this.layer = document.getElementById('dmg-layer');
     this.numbers = []; this.nPool = [];
-    this.shake = 0; this.shakeV = new THREE.Vector3(); this.fogD = 0.0042;
+    this.shake = 0; this.shakeV = new THREE.Vector3(); this.fogD = 0.0042; this.density = 1;
   }
-  spawn(o) { (o.add ? this.add : this.norm).spawn(o); }
+  spawn(o) { if (this.density < 1 && Math.random() > this.density) return; (o.add ? this.add : this.norm).spawn(o); }
 
   // ---- Leuchtspur ----
   tracer(a, b, color = 0xffe08a, o = {}) {

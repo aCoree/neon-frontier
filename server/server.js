@@ -14,12 +14,26 @@ const SERVE_CLIENT = process.env.SERVE_CLIENT !== '0';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 
 const rooms = new Map();
+
+// ---- Metriken (für /metrics und Lasttests) ----
+const M = { bytesOut: 0, bytesIn: 0, msgsIn: 0, tickSum: 0, tickMax: 0, ticks: 0, lastCpu: process.cpuUsage(), lastT: Date.now(), snap: null, errors: 0, slowTicks: 0 };
+function metricsSnapshot() {
+  const now = Date.now(), dt = (now - M.lastT) / 1000 || 1, cpu = process.cpuUsage(M.lastCpu);
+  const mem = process.memoryUsage();
+  const out = { windowSec: +dt.toFixed(2), tickAvgMs: +(M.tickSum / Math.max(1, M.ticks)).toFixed(3), tickMaxMs: +M.tickMax.toFixed(2), ticksPerSec: +(M.ticks / dt).toFixed(1), slowTicks: M.slowTicks,
+    cpuPct: +(((cpu.user + cpu.system) / 1000) / (dt * 10)).toFixed(1), rssMB: +(mem.rss / 1048576).toFixed(1), heapMB: +(mem.heapUsed / 1048576).toFixed(1),
+    outKBps: +(M.bytesOut / 1024 / dt).toFixed(1), inKBps: +(M.bytesIn / 1024 / dt).toFixed(1), msgsInPerSec: +(M.msgsIn / dt).toFixed(0), rooms: rooms.size, players: [...rooms.values()].reduce((n, r) => n + r.humans().length, 0), errors: M.errors };
+  M.bytesOut = M.bytesIn = M.msgsIn = M.tickSum = M.tickMax = M.ticks = M.slowTicks = 0; M.lastCpu = process.cpuUsage(); M.lastT = now;
+  return out;
+}
+
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const newCode = () => { for (let i = 0; i < 200; i++) { let c = ''; for (let k = 0; k < 4; k++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; if (!rooms.has(c)) return c; } return 'R' + Date.now().toString(36).slice(-3).toUpperCase(); };
 
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
   if (url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); return res.end(JSON.stringify({ ok: true, rooms: rooms.size, players: [...rooms.values()].reduce((n, r) => n + r.humans().length, 0) })); }
+  if (url === '/metrics') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); return res.end(JSON.stringify(metricsSnapshot())); }
   if (url === '/rooms') { const list = [...rooms.values()].filter(r => r.state === 'lobby' && r.settings.public && r.humans().length).map(r => ({ code: r.code, host: r.members.get(r.hostId)?.name || '?', mode: MODES[r.settings.mode].name, players: r.humans().length })); res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); return res.end(JSON.stringify(list)); }
   if (!SERVE_CLIENT) { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('NEON FRONTIER game server. WebSocket on this port.'); }
   let p = url.endsWith('/') ? url + 'index.html' : url;
@@ -37,13 +51,14 @@ const wss = new WebSocketServer({ server, maxPayload: 16 * 1024, perMessageDefla
 
 wss.on('connection', (ws, req) => {
   ws.isAlive = true; ws.on('pong', () => { ws.isAlive = true; });
-  const client = { send(o, raw) { if (ws.readyState === 1) { try { ws.send(raw ? o : JSON.stringify(o)); } catch { /* Verbindung weg */ } } } };
+  const client = { send(o, raw) { if (ws.readyState === 1) { try { const d = raw ? o : JSON.stringify(o); M.bytesOut += d.length; ws.send(d); } catch { /* Verbindung weg */ } } } };
   let room = null, member = null, profile = null, bucket = 120, lastRefill = Date.now();
 
   ws.on('message', (data) => {
     // Rate-Limit: ~200 Nachrichten/s Burst, 120/s im Mittel
     const now = Date.now(); bucket = Math.min(240, bucket + (now - lastRefill) * 0.12); lastRefill = now;
     if (--bucket < 0) return;
+    M.msgsIn++; M.bytesIn += data.length || 0;
     let msg; try { msg = JSON.parse(data); } catch { return; }
     if (!msg || typeof msg.k !== 'string') return;
     try {
@@ -90,8 +105,8 @@ wss.on('connection', (ws, req) => {
 // Spiel-Tick (40 Hz) & Aufräumen
 setInterval(() => {
   for (const [code, room] of rooms) {
-    try { room.tick(); } catch (e) { console.error(`[room ${code}] Tick-Fehler`, e); }
-    if (room.emptyAt && Date.now() - room.emptyAt > 60000) { room.destroy(); rooms.delete(code); console.log(`[room ${code}] entfernt (leer)`); }
+    const t0 = performance.now(); try { room.tick(); } catch (e) { M.errors++; console.error(`[room ${code}] Tick-Fehler`, e); } const dtm = performance.now() - t0; M.tickSum += dtm; M.ticks++; if (dtm > M.tickMax) M.tickMax = dtm; if (dtm > 25) M.slowTicks++;
+    if (room.emptyAt && Date.now() - room.emptyAt > 20000) { room.destroy(); rooms.delete(code); console.log(`[room ${code}] entfernt (leer)`); }
   }
 }, 25);
 setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; try { ws.ping(); } catch { /* ignore */ } } }, 15000);

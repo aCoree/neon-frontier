@@ -4,6 +4,7 @@ import { Game } from './game/game.js';
 import { UI } from './ui/ui.js';
 import { Progress } from './game/progress.js';
 import { audio } from './game/audio.js';
+import { Perf } from './render/perf.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -22,19 +23,24 @@ async function boot() {
   const game = new Game(engine, canvas); const ui = new UI(game); game.ui = ui; window.game = game;
   ui.init();
   audio.setVolumes({ master: S.master, music: S.music, sfx: S.sfx, ambient: S.ambient });
-  game.enterMenu();
+  game.enterMenu(); window.__bootMs = Math.round(performance.now());
   $('#loading').classList.add('hide'); setTimeout(() => { $('#loading').style.display = 'none'; }, 900);
   if (!Progress.d.name) { ui.showScreen('menu'); ui.go('name'); setTimeout(() => $('#name-input').focus(), 100); } else ui.showScreen('menu');
   // Einladungslink ?room=ABCD
   const room = (params.get('room') || '').toUpperCase();
   if (room) { const join = () => ui.joinRoom(room); if (Progress.d.name) setTimeout(join, 400); else ui.afterName = join; history.replaceState(null, '', location.pathname); }
+  const perf = new Perf(engine, S); engine.perf = perf; engine.applySettings(S);
   let last = performance.now();
   const loop = (now) => {
-    const dt = Math.min(0.05, (now - last) / 1000); last = now;
-    try { game.frame(dt); } catch (e) { console.error('Frame-Fehler', e); if (!window.__frameErr) { window.__frameErr = 1; ui.toast('Fehler: ' + e.message, 'bad'); } }
     requestAnimationFrame(loop);
+    if (document.hidden) { last = now; return; }          // unsichtbarer Tab: nichts rendern (Akku)
+    if (!perf.shouldRender(now)) return;                 // Frame-Pacing / FPS-Limit
+    const delta = now - last, dt = Math.min(0.05, delta / 1000); last = now;
+    const t0 = performance.now();
+    try { game.frame(dt); } catch (e) { console.error('Frame-Fehler', e); if (!window.__frameErr) { window.__frameErr = 1; ui.toast('Fehler: ' + e.message, 'bad'); } }
+    perf.frameEnd(delta, performance.now() - t0, engine.lastRenderMs);
   };
   requestAnimationFrame(loop);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) Progress.save(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { Progress.save(); audio.ctx && audio.ctx.suspend(); } else audio.ctx && audio.ctx.resume(); });
 }
 boot().catch((e) => { console.error(e); const el = $('#load-err'); if (el) el.textContent = 'Startfehler: ' + (e.stack || e.message || e); });

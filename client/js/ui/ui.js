@@ -223,7 +223,12 @@ export class UI {
   // ---------- Einstellungen ----------
   buildSettings() {
     const S = Progress.d.settings, g = this.g;
-    $$('#set-quality button').forEach(b => b.onclick = () => { audio.click(); S.quality = b.dataset.v; Progress.save(); g.engine.applyQuality(S.quality); this.syncSettings(); });
+    $$('#set-quality button').forEach(b => b.onclick = () => { audio.click(); S.quality = b.dataset.v; S.shadows = 'auto'; S.particles = QUALITY[S.quality].part; S.viewDist = QUALITY[S.quality].view; Progress.save(); g.engine.applyQuality(S.quality); g.engine.applySettings(S); this.syncSettings(); });
+    const segs = [['#set-fps', 'fpsCap', true], ['#set-shadows', 'shadows', false], ['#set-part', 'particles', true], ['#set-view', 'viewDist', true]];
+    for (const [sel, key, num] of segs) $$(sel + ' button').forEach(b => b.onclick = () => { audio.click(); S[key] = num ? +b.dataset.v : b.dataset.v; Progress.save(); g.engine.applySettings(S); g.engine.perf.reset(); this.syncSettings(); });
+    $('#set-dynres').onchange = (e) => { S.dynRes = e.target.checked; Progress.save(); if (!S.dynRes) g.engine.perf.reset(); };
+    $('#set-battery').onchange = (e) => { S.batterySaver = e.target.checked; Progress.save(); g.engine.applySettings(S); g.engine.perf.reset(); };
+    $('#set-scale').oninput = (e) => { S.renderScale = +e.target.value; $('#set-scale').parentElement.querySelector('b').textContent = Math.round(S.renderScale * 100) + '%'; Progress.save(); g.engine.applySettings(S); };
     const bind = (id, key, fmt = (v) => v, apply) => { const el = $(id), out = $(id + '-v') || el.parentElement.querySelector('b'); el.oninput = () => { S[key] = +el.value; if (out) out.textContent = fmt(S[key]); Progress.save(); apply && apply(S[key]); }; };
     bind('#set-fov', 'fov', v => v + '°'); bind('#set-shake', 'shake', v => Math.round(v * 100) + '%'); bind('#set-sens', 'sens', v => v.toFixed(2));
     bind('#set-master', 'master', v => Math.round(v * 100) + '%', () => audio.setVolumes({ master: S.master })); bind('#set-music', 'music', v => Math.round(v * 100) + '%', () => audio.setVolumes({ music: S.music }));
@@ -234,6 +239,8 @@ export class UI {
     const S = Progress.d.settings;
     $$('#set-quality button').forEach(b => b.classList.toggle('on', b.dataset.v === S.quality));
     for (const [id, k, f] of [['#set-fov', 'fov', v => v + '°'], ['#set-shake', 'shake', v => Math.round(v * 100) + '%'], ['#set-sens', 'sens', v => v.toFixed(2)], ['#set-master', 'master', v => Math.round(v * 100) + '%'], ['#set-music', 'music', v => Math.round(v * 100) + '%'], ['#set-sfx', 'sfx', v => Math.round(v * 100) + '%'], ['#set-ambient', 'ambient', v => Math.round(v * 100) + '%']]) { const el = $(id); el.value = S[k]; const o = $(id + '-v') || el.parentElement.querySelector('b'); if (o) o.textContent = f(S[k]); }
+    for (const [sel, key] of [['#set-fps', 'fpsCap'], ['#set-shadows', 'shadows'], ['#set-part', 'particles'], ['#set-view', 'viewDist']]) $$(sel + ' button').forEach(b => b.classList.toggle('on', String(b.dataset.v) === String(S[key])));
+    $('#set-dynres').checked = S.dynRes; $('#set-battery').checked = S.batterySaver; $('#set-scale').value = S.renderScale; $('#set-scale').parentElement.querySelector('b').textContent = Math.round(S.renderScale * 100) + '%';
     $('#set-invert').checked = S.invertY; $('#set-dmg').checked = S.dmgNumbers;
   }
 

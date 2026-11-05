@@ -70,6 +70,7 @@ export class Game {
   disconnect() { if (this.net) { try { this.net.leave && this.net.leave(); this.net.close(); } catch { /* ignore */ } } this.net = null; this.roomCode = null; this.lobby = null; }
   bindNet(n) {
     const on = (k, f) => n.on(k, f.bind(this));
+    n.onBytes = (b) => this.engine.perf && this.engine.perf.netBytes(b);
     on('joined', (m) => { this.roomCode = m.code; this.myId = m.you; this.isHost = m.host === m.you; this.you = 'p' + m.you; if (m.resumed) this.ui.toast('Wieder verbunden!', 'good'); });
     on('lobby', (m) => { this.lobby = m; this.isHost = m.host === this.myId; if (this.mode === 'play' && (this.matchEnded || m.state === 'lobby')) { this.endMatchLocal(); this.enterMenu(); document.getElementById('results').classList.remove('show'); } this.ui.setLobby(m, this.myId); });
     on('start', (m) => this.onStart(m));
@@ -487,7 +488,7 @@ export class Game {
   frame(dt) {
     this.t += dt;
     const eng = this.engine, now = performance.now() / 1000;
-    this.fx.fogD = eng.scene.fog.density;
+    this.fx.fogD = eng.scene.fog.density; this.fx.density = eng.partDensity;
     if (this.mode === 'menu') { this.updateMenu(dt); }
     else if (this.mode === 'play') { this.updatePlay(dt, now); }
     if (this.duck) { this.duck.visible = !Progress.d.ach.duck; this.duck.rotation.y += dt * 1.5; this.duck.position.y += Math.sin(this.t * 2) * dt * 0.05; }

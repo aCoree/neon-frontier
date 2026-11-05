@@ -18,7 +18,7 @@
 <div id="loading">
   <div class="logo big"><span>NEON</span><b>FRONTIER</b></div>
   <div class="bar"><i id="load-bar"></i></div>
-  <div id="load-text">Starte …</div>
+  <div id="load-text">Starte …</div><div style="color:#5d7088;font-size:13px;letter-spacing:.2em">MADE BY AURELIO ZINGARELLO</div>
   <div id="load-err"></div>
 </div>
 
@@ -35,7 +35,7 @@
       <button class="mbtn" data-go="ach"><i>★</i><span>Erfolge<small id="ach-count">0 / 14</small></span></button>
       <button class="mbtn" data-go="settings"><i>⚙</i><span>Einstellungen<small>Grafik, Audio, Steuerung</small></span></button>
     </nav>
-    <div class="menu-foot">WASD · Maus · Leertaste · Shift · C · Q (Dash) · F (Gadget) · Tab · <a href="#" id="link-help">Alle Tasten</a></div>
+    <div class="menu-foot"><b style="color:var(--c1)">NEON FRONTIER</b> · © Aurelio Zingarello<br>WASD · Maus · Leertaste · Shift · C · Q (Dash) · F (Gadget) · Tab · <a href="#" id="link-help">Alle Tasten</a></div>
   </div>
   <div class="profile-chip" id="profile-chip">
     <div class="pc-name" id="pc-name">Spieler</div>
@@ -155,6 +155,13 @@
         <h4>Grafik</h4>
         <div class="seg" id="set-quality"><button data-v="low">Niedrig</button><button data-v="medium">Mittel</button><button data-v="high">Hoch</button><button data-v="ultra">Ultra</button></div>
         <p class="hint">Ultra aktiviert Ambient Occlusion &amp; 4K-Schatten. Gras-Dichte und Lichter werden nach einem Neuladen übernommen.</p>
+        <label class="rowlbl">FPS-Limit<div class="seg" id="set-fps"><button data-v="30">30</button><button data-v="60">60</button><button data-v="120">120</button><button data-v="0">Unbegrenzt</button></div></label>
+        <label class="chk"><input type="checkbox" id="set-dynres"> Dynamische Auflösung (passt sich der FPS an, UI bleibt scharf)</label>
+        <label class="chk"><input type="checkbox" id="set-battery"> Akku-Sparmodus (30 FPS, weniger Effekte)</label>
+        <label class="rowlbl">Renderauflösung<div class="slider"><input type="range" id="set-scale" min="0.5" max="1" step="0.05"><b></b></div></label>
+        <label class="rowlbl">Schatten<div class="seg" id="set-shadows"><button data-v="auto">Auto</button><button data-v="off">Aus</button><button data-v="1024">Niedrig</button><button data-v="2048">Hoch</button><button data-v="4096">Ultra</button></div></label>
+        <label class="rowlbl">Partikel &amp; Effekte<div class="seg" id="set-part"><button data-v="0.35">Wenig</button><button data-v="0.65">Mittel</button><button data-v="1">Viel</button></div></label>
+        <label class="rowlbl">Sichtweite<div class="seg" id="set-view"><button data-v="260">Nah</button><button data-v="380">Mittel</button><button data-v="520">Weit</button></div></label>
         <label class="rowlbl">Sichtfeld (FOV)<div class="slider"><input type="range" id="set-fov" min="60" max="100" step="1"><b id="set-fov-v"></b></div></label>
         <label class="rowlbl">Kamera-Wackeln<div class="slider"><input type="range" id="set-shake" min="0" max="1" step="0.1"><b id="set-shake-v"></b></div></label>
         <label class="chk"><input type="checkbox" id="set-dmg"> Schadenszahlen anzeigen</label>

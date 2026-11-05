@@ -44,6 +44,7 @@ export class Net extends Emitter {
           if (!settled) { settled = true; resolve(); }
         };
         ws.onmessage = (ev) => {
+          this.onBytes && this.onBytes(ev.data.length);
           let m; try { m = JSON.parse(ev.data); } catch { return; }
           if (m.k === 'pong') { this.rtt = Math.max(0.005, (performance.now() - m.t) / 1000); this.emit('rtt', this.rtt); this.emit('pong', m); return; }
           if (m.k === 'joined') this.session = { code: m.code, id: m.you, token: m.token };
@@ -79,7 +80,7 @@ export class LocalNet extends Emitter {
   }
   async connect() { setTimeout(() => this.emit('status', 'open'), 0); }
   send(o) {
-    if (o.k === 'create') { this.room = new Room('LOCAL', { local: true, settings: o.settings }); this.member = this.room.addMember(this.client, this.profile); this.timer = setInterval(() => { try { this.room.tick(); } catch (e) { console.error('Sim-Fehler', e); } }, 25); return; }
+    if (o.k === 'create') { this.room = new Room('LOCAL', { local: true, settings: o.settings }); this.member = this.room.addMember(this.client, this.profile); this.timer = setInterval(() => { if (document.hidden) { this.room.last = Date.now(); return; } try { this.room.tick(); } catch (e) { console.error('Sim-Fehler', e); } }, 25); return; }
     if (o.k === 'ping') { this.emit('pong', { t: o.t, T: this.room?.T }); return; }
     if (o.k === 'leave') { this.close(); return; }
     if (this.room && this.member) this.room.handle(this.member, o);

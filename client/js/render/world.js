@@ -109,7 +109,7 @@ export class WorldView {
       const trans = mat.transparent || mat.userData.glow;
       mesh.castShadow = !nc && !trans; mesh.receiveShadow = !mat.userData.glow;
       if (mat.transparent) mesh.renderOrder = 2;
-      this.group.add(mesh);
+      this.group.add(mesh); (this.staticMeshes || (this.staticMeshes = [])).push(mesh);
     }
   }
   buildDyn(p, mat, tile) {
@@ -450,6 +450,11 @@ export class WorldView {
   }
   update(dt, t, cam, focus) {
     this.windU.value = t;
+    this.cullT = (this.cullT || 0) - dt;
+    if (this.cullT <= 0 && this.staticMeshes) { // Distanz-Culling großer Kacheln (Sichtweite aus den Grafikeinstellungen)
+      this.cullT = 0.4; const vd = this.viewDist || 450;
+      for (const m of this.staticMeshes) { const bs = m.geometry.boundingSphere; m.visible = cam.distanceTo(bs.center) - bs.radius < vd; }
+    }
     this.waterUpdate(t);
     this.updateLOD(cam);
     this.updateLights(focus || cam, t, dt);

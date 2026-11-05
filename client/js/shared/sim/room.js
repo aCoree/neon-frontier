@@ -10,6 +10,7 @@ const R_BODY = 0.42, H_STAND = 1.8, H_CROUCH = 1.25;
 const r2 = (v) => Math.round(v * 100) / 100;
 const clean = (s, n = 16) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
 let idc = 1;
+const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr', 'drop', 'lowgrav', 'supply', 'supplyland', 'toast', 'join', 'leave', 'spawn', 'drone']);
 
 export class Room {
   constructor(code, opts = {}) {
@@ -20,7 +21,8 @@ export class Room {
     this.rng = mulberry32((Date.now() & 0xffffff) ^ 0x5bd1e995);
     this.nextId = 1; this.projs = []; this.dyn = []; this.smokes = []; this.drones = []; this.supplies = [];
     this.lowgravUntil = 0; this.endAt = 0; this.startAt = 0; this.matchEnd = 0; this.lastClock = 0;
-    this.map = buildMap(true); this.world = new World(this.map);
+    this.map = buildMap(true); this.map.parts = []; this.map.props = []; this.map.glows = []; this.map.lights = []; this.map.anims = []; this.map.labels = []; // nur Render-Daten, Server braucht sie nicht
+    this.world = new World(this.map);
     this.nav = Nav.for(this.world);
     this.bots = new Bots(this);
     this.doorsById = new Map(this.map.doors.map(d => [d.id, d]));
@@ -170,6 +172,7 @@ export class Room {
     for (const m of humans) this.sendStart(m);
   }
   sendStart(m) {
+    m.sent = null;
     const S = this.settings;
     this.send(m, {
       k: 'start', you: m.ent ? m.ent.id : null, settings: S, T: this.T, startAt: this.startAt, hour0: this.hour0, scoreLimit: this.scoreLimit, timeLimit: this.timeLimit,
@@ -715,15 +718,47 @@ export class Room {
   }
   pickArr(a) { return a[Math.floor(this.rng() * a.length)]; }
 
+  // ---- Snapshot-Versand mit Interest Management ----
+  // Pro Empfänger: nahe Entitäten mit voller Rate, ferne seltener; unveränderte Entitäten werden übersprungen;
+  // positionsbezogene Events nur für Spieler in Reichweite. Eigene Daten, Teammitglieder und Tote kommen immer durch.
+  evPos(ev) {
+    const p = ev.p || ev.o; if (Array.isArray(p)) return p;
+    if (ev.id) { const e = this.ents.get(ev.id); if (e) return [e.x, e.y, e.z]; }
+    return null;
+  }
   flush(force) {
     if (!this.ev.length && !force && this.state === 'lobby') return;
-    const ents = [];
-    for (const e of this.ents.values()) ents.push([e.id, r2(e.x), r2(e.y), r2(e.z), r2(e.yaw), r2(e.pitch), e.fl | (e.alive ? 0 : FL.DEAD), e.w, Math.ceil(e.hp), Math.ceil(e.shield)]);
+    this.snapN = (this.snapN || 0) + 1; const n = this.snapN;
+    const rows = new Map();
+    for (const e of this.ents.values()) rows.set(e.id, [e.id, r2(e.x), r2(e.y), r2(e.z), r2(e.yaw), r2(e.pitch), e.fl | (e.alive ? 0 : FL.DEAD), e.w, Math.ceil(e.hp), Math.ceil(e.shield)]);
     const drones = this.drones.map(d => [d.id, r2(d.x), r2(d.y), r2(d.z), d.owner.id, d.team]);
-    const snap = { k: 'snap', T: r2(this.T), e: ents, d: drones, ev: this.ev };
+    const T = r2(this.T);
+    const evs = this.ev.map(ev => ({ ev, pos: GLOBAL_EV.has(ev.k) ? null : this.evPos(ev) }));
     this.ev = [];
-    const str = JSON.stringify(snap);
-    for (const m of this.members.values()) if (m.connected && m.client) m.client.send(str, true);
+    for (const m of this.members.values()) {
+      if (!m.connected || !m.client) continue;
+      const me = m.ent, list = [], sent = m.sent || (m.sent = new Map());
+      for (const e of this.ents.values()) {
+        const row = rows.get(e.id);
+        if (!me || e === me || !me.alive) { list.push(row); continue; }
+        const d = Math.hypot(e.x - me.x, e.z - me.z), ally = me.team >= 0 && e.team === me.team;
+        const every = d < 55 ? 1 : d < 120 ? 2 : d < 220 ? 4 : 8;
+        const last = sent.get(e.id);
+        const changed = !last || last[0] !== row[6] || last[1] !== row[7] || last[2] !== row[8] || last[3] !== row[9];
+        const moved = !last || Math.abs(last[4] - row[1]) + Math.abs(last[5] - row[3]) > 0.02 || Math.abs(last[6] - row[4]) > 0.01 || Math.abs(last[7] - row[5]) > 0.01 || Math.abs(last[8] - row[2]) > 0.02;
+        const due = !last || n - last[9] >= (ally ? Math.min(every, 2) : every);
+        if (changed || (due && (moved || n - last[9] >= 20))) { list.push(row); sent.set(e.id, [row[6], row[7], row[8], row[9], row[1], row[3], row[4], row[5], row[2], n]); }
+      }
+      for (const id of [...sent.keys()]) if (!this.ents.has(id)) sent.delete(id);
+      const out = [];
+      for (const { ev, pos } of evs) {
+        if (!pos || !me) { out.push(ev); continue; }
+        const inv = ev.v === me.id || ev.a === me.id || ev.id === me.id || ev.own === me.id;
+        const rad = ev.k === 'boom' || ev.k === 'proj' || ev.k === 'shot' ? 230 : 140;
+        if (inv || Math.hypot(pos[0] - me.x, pos[2] - me.z) < rad) out.push(ev);
+      }
+      m.client.send(JSON.stringify({ k: 'snap', T, e: list, d: drones, ev: out }), true);
+    }
   }
 
   destroy() { this.members.clear(); this.ents.clear(); }
