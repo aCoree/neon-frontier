@@ -72,4 +72,13 @@ export const MIGRATIONS = [
       user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, last_claim DATE, streak INT NOT NULL DEFAULT 0
     );
   ` },
+  { v: 4, name: 'friends', sql: `
+    CREATE TABLE IF NOT EXISTS friendships (
+      requester BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, addressee BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (requester, addressee), CHECK (requester <> addressee)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS friendships_pair_idx ON friendships (LEAST(requester, addressee), GREATEST(requester, addressee));
+    CREATE INDEX IF NOT EXISTS friendships_addressee_idx ON friendships (addressee)
+  ` },
 ];

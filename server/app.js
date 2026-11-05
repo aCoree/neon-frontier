@@ -27,8 +27,14 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     M.bytesOut = M.bytesIn = M.msgsIn = M.tickSum = M.tickMax = M.ticks = M.slowTicks = 0; M.lastCpu = process.cpuUsage(); M.lastT = now;
     return out;
   }
+  const sockets = new Map();   // userId -> Anzahl offener WebSocket-Verbindungen (angemeldet)
+  const presence = (userId) => {
+    const online = (sockets.get(userId) || 0) > 0; if (!online) return { online: false };
+    for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.connected) return { online: true, room: r.state === 'lobby' ? r.code : null, inMatch: r.state !== 'lobby' };
+    return { online: true };
+  };
   const api = new Api({
-    db, config, log, metrics: () => metricsSnapshot(),
+    db, config, log, presence, metrics: () => metricsSnapshot(),
     rooms: () => [...rooms.values()].map(r => ({ code: r.code, state: r.state, mode: r.settings.mode, players: r.humans().length, matchId: r.matchId })),
     onBan: (userId, reason) => { for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
   });
@@ -84,6 +90,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
           if (db) { const clash = await db.one('SELECT 1 FROM users WHERE username_lower=$1', [name.toLowerCase()]); if (clash) name = name.slice(0, 11) + '_G' + Math.floor(Math.random() * 90 + 10); }
           profile = { name, skin: msg.skin, wskin: msg.wskin, level: Math.min(99, msg.level | 0) };
         }
+        if (acct && profile.userId && !client.counted) { client.counted = profile.userId; sockets.set(profile.userId, (sockets.get(profile.userId) || 0) + 1); }
         client.send({ k: 'welcome', v: 2, serverTime: Date.now(), account: !!acct, name: profile.name, role: acct ? acct.role : 'GUEST' }); return;
       }
       if (msg.k === 'create') {
@@ -120,7 +127,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       chain = chain.then(() => onMessage(msg)).catch((e) => { M.errors++; log.error('Fehler bei Nachricht', msg.k, e); });  // Nachrichten pro Verbindung strikt nacheinander
     });
     function leave() { if (room && member) { try { room.removeMember(member, true); } catch (e) { log.error(e); } } room = null; member = null; }
-    ws.on('close', () => { if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
+    ws.on('close', () => { if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
     ws.on('error', () => {});
   });
 

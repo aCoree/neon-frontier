@@ -70,6 +70,7 @@ export class UI {
     if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); }
     if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
+    if (name === 'friends') this.openFriends();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     $('#clickhint').classList.remove('show');
@@ -87,6 +88,7 @@ export class UI {
     this.cur = name; $('#s-' + name).classList.add('show');
     if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
+    if (name === 'friends') this.openFriends();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
     if (name === 'solo') this.refreshSolo();
@@ -117,7 +119,45 @@ export class UI {
   }
   ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
 
+  // ---------- Freunde ----------
+  openFriends() {
+    clearInterval(this.frTimer);
+    const guest = !Account.user; $('#fr-guest').style.display = guest ? '' : 'none'; $('#fr-main').style.display = guest ? 'none' : '';
+    if (guest) return; this.refreshFriends(); this.frTimer = setInterval(() => { if (this.cur === 'friends') this.refreshFriends(); else clearInterval(this.frTimer); }, 6000);
+  }
+  async refreshFriends() {
+    let d; try { d = await Account.friends(); } catch (e) { this.toast(e.message, 'bad'); return; }
+    const row = (name, extra, actions) => { const r = document.createElement('div'); r.className = 'room'; const l = document.createElement('div'); l.style.display = 'flex'; l.style.alignItems = 'center'; l.style.gap = '10px'; l.innerHTML = extra; l.querySelector('.fn').textContent = name; const a = document.createElement('div'); a.style.display = 'flex'; a.style.gap = '8px'; for (const [t, f] of actions) { const b = document.createElement('button'); b.className = 'btn small'; b.textContent = t; b.onclick = (e) => { e.stopPropagation(); f(); }; a.appendChild(b); } r.append(l, a); return r; };
+    const act = (kind, name, msg) => async () => { try { await Account.friendAction(kind, name); audio.click(); if (msg) this.toast(msg, 'good'); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); audio.error(); } };
+    const list = $('#fr-list'); list.replaceChildren(); $('#fr-total').textContent = '(' + d.friends.length + ')';
+    if (!d.friends.length) list.innerHTML = '<div class="empty">Noch keine Freunde. Suche links nach Spielernamen.</div>';
+    for (const f of d.friends) {
+      const acts = []; if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', () => { if (confirm(f.username + ' aus der Freundesliste entfernen?')) act('remove', f.username)(); }]);
+      list.appendChild(row(f.username, `<span style="width:10px;height:10px;border-radius:50%;background:${f.online ? 'var(--good)' : '#556'};box-shadow:${f.online ? '0 0 8px var(--good)' : 'none'}"></span><b class="fn"></b><small>Lv ${f.level} · ${f.rank} · ${f.online ? (f.inMatch ? 'im Match' : f.room ? 'in einer Lobby' : 'online') : 'offline'}</small>`, acts));
+    }
+    const inn = $('#fr-in'); inn.replaceChildren(); if (!d.incoming.length) inn.innerHTML = '<div class="empty">Keine offenen Anfragen.</div>';
+    for (const r of d.incoming) inn.appendChild(row(r.username, '<b class="fn"></b><small>Lv ' + r.level + '</small>', [['Annehmen', act('accept', r.username, r.username + ' ist jetzt dein Freund!')], ['Ablehnen', act('decline', r.username)]]));
+    const out = $('#fr-out'); out.replaceChildren(); for (const r of d.outgoing) out.appendChild(row(r.username, '<b class="fn"></b><small>wartet …</small>', [['Zurückziehen', act('remove', r.username)]]));
+    $('#fr-count').textContent = d.incoming.length ? d.incoming.length + ' neue Anfrage(n)!' : 'Suchen & einladen';
+  }
+  async searchPlayers(more) {
+    const q = $('#fr-q').value.trim(); if (q.length < 2) return this.toast('Mindestens 2 Zeichen eingeben.', 'bad');
+    const box = $('#fr-results'); if (!more) { box.replaceChildren(); this.frNext = null; }
+    try {
+      const r = await Account.search(q, more ? this.frNext : null); this.frNext = r.next; $('#fr-more').style.display = r.next ? '' : 'none';
+      if (!r.players.length && !more) box.innerHTML = '<div class="empty">Keine Spieler gefunden.</div>';
+      for (const p of r.players) {
+        const d = document.createElement('div'); d.className = 'room'; const l = document.createElement('div'); l.innerHTML = '<b class="fn" style="font:800 17px var(--font);letter-spacing:.05em;color:var(--txt)"></b> <small></small>'; l.querySelector('.fn').textContent = p.username; l.querySelector('small').textContent = 'Lv ' + p.level + ' · ' + p.rank; d.appendChild(l);
+        const rel = { friend: 'Freund ✓', outgoing: 'Anfrage gesendet', incoming: 'Hat dir eine Anfrage gesendet' }[p.relation];
+        if (rel) { const s = document.createElement('small'); s.textContent = rel; d.appendChild(s); } else { const b = document.createElement('button'); b.className = 'btn small'; b.textContent = 'Hinzufügen'; b.onclick = async () => { try { const x = await Account.friendAction('request', p.username); b.replaceWith(Object.assign(document.createElement('small'), { textContent: x.accepted ? 'Freund ✓' : 'Anfrage gesendet' })); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } }; d.appendChild(b); }
+        box.appendChild(d);
+      }
+    } catch (e) { this.toast(e.message, 'bad'); }
+  }
+  async checkFriendRequests() { if (!Account.user) return; try { const d = await Account.friends(); if (d.incoming.length) { this.toast(d.incoming.length + ' neue Freundschaftsanfrage(n)!', 'event'); $('#fr-count').textContent = d.incoming.length + ' neue Anfrage(n)!'; } } catch { /* ignorieren */ } }
   initAccount() {
+    $('#fr-search').onclick = () => this.searchPlayers(false); $('#fr-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.searchPlayers(false); }); $('#fr-more').onclick = () => this.searchPlayers(true);
+    $('#fr-login').onclick = () => { audio.click(); this.go('login'); };
     let mode = 'login'; const err = (t) => { $('#lg-err').textContent = t || ''; };
     const ownerField = () => { $('#lg-owner').style.display = mode === 'register' && $('#lg-user').value.trim().toLowerCase() === 'aurelio' ? '' : 'none'; };
     $$('#lg-mode button').forEach(b => b.onclick = () => { audio.click(); mode = b.dataset.v; $$('#lg-mode button').forEach(x => x.classList.toggle('on', x === b)); $('#lg-pass').autocomplete = mode === 'login' ? 'current-password' : 'new-password'; err(); ownerField(); });

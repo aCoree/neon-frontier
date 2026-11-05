@@ -32,6 +32,7 @@
       <button class="mbtn" data-act="private"><i>⚿</i><span>Private Lobby<small>Raum + Einladungslink</small></span></button>
       <button class="mbtn" data-act="training"><i>◎</i><span>Training<small>Schießstand &amp; alle Waffen</small></span></button>
       <button class="mbtn" data-go="skins"><i>✦</i><span>Skins<small>Charaktere &amp; Waffen</small></span></button>
+      <button class="mbtn" data-go="friends"><i>☺</i><span>Freunde<small id="fr-count">Suchen &amp; einladen</small></span></button>
       <button class="mbtn" data-go="ach"><i>★</i><span>Erfolge<small id="ach-count">0 / 14</small></span></button>
       <button class="mbtn" data-go="settings"><i>⚙</i><span>Einstellungen<small>Grafik, Audio, Steuerung</small></span></button>
     </nav>
@@ -68,6 +69,28 @@
     <div id="lg-err" class="hint" style="color:var(--bad);min-height:20px"></div>
     <p class="hint">Mit Konto speichert der Server XP, Level und Rang. Ohne Konto spielst du als Gast. Dein Passwort wird nie im Klartext gespeichert.</p>
     <div class="row end"><button class="btn" data-back>Abbrechen</button><button class="btn primary" id="lg-ok">Weiter</button></div>
+  </div>
+</section>
+
+<!-- ================= FREUNDE ================= -->
+<section id="s-friends" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Freunde</h2></header>
+    <div id="fr-guest" class="empty" style="display:none">Melde dich mit einem Konto an, um Freunde hinzuzufügen. <button class="link" id="fr-login">Anmelden</button></div>
+    <div class="grid2" id="fr-main">
+      <div>
+        <h4>Spieler suchen</h4>
+        <div class="row"><input id="fr-q" maxlength="16" placeholder="Benutzername (Anfang)…" autocomplete="off" spellcheck="false"><button class="btn" id="fr-search">Suchen</button></div>
+        <div class="rooms" id="fr-results"></div>
+        <button class="link" id="fr-more" style="display:none">Mehr anzeigen</button>
+        <h4>Anfragen an dich</h4><div class="rooms" id="fr-in"><div class="empty">Keine offenen Anfragen.</div></div>
+        <h4>Von dir gesendet</h4><div class="rooms" id="fr-out"></div>
+      </div>
+      <div>
+        <h4>Meine Freunde <small id="fr-total"></small></h4>
+        <div class="rooms" id="fr-list" style="max-height:60vh"></div>
+      </div>
+    </div>
   </div>
 </section>
 

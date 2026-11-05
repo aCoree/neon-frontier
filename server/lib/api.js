@@ -5,12 +5,12 @@ import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
 import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
-export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, maintenance: false };
+export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, maintenance: false };
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 
 export class Api {
-  constructor({ db, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, log = console }) {
-    this.db = db; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
+  constructor({ db, config = {}, metrics = () => ({}), rooms = () => [], onBan = () => {}, presence = () => ({ online: false }), log = console }) {
+    this.presence = presence; this.db = db; this.cfg = config; this.metrics = metrics; this.rooms = rooms; this.onBan = onBan; this.log = log;
     this.rl = new RateLimiter(); this.flags = { ...DEFAULT_FLAGS };
   }
   async init() {
@@ -57,6 +57,60 @@ export class Api {
     const rank = rankOf(s.rank_points), next = RANKS.find(r => r.min > s.rank_points);
     return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, bestRank: rankOf(s.best_rank_points), nextRankAt: next ? next.min : null, currency: Number(s.currency) } };
   }
+  // ---------- Freunde & Spielersuche ----------
+  async friendsRoute(req, res, url, user) {
+    if (!this.flags.friends) return this.send(res, 503, { error: 'Das Freunde-System ist gerade deaktiviert.' });
+    const path = url.split('?')[0], q = new URLSearchParams(url.split('?')[1] || ''), uid = user.id;
+    if (req.method === 'GET' && path === '/api/players/search') {
+      if (this.rl.hit('psearch:' + uid, 40, 60000)) return this.send(res, 429, { error: 'Zu viele Suchanfragen.' });
+      const term = clip(q.get('q'), 16).toLowerCase().replace(/[^a-z0-9_-]/g, ''), after = clip(q.get('after'), 16).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (term.length < 2) return this.send(res, 400, { error: 'Mindestens 2 Zeichen eingeben.' });
+      const rows = await this.db.all(`SELECT u.id, u.username, u.username_lower, s.level, s.rank_points FROM users u JOIN user_stats s ON s.user_id=u.id
+        WHERE u.username_lower LIKE $1 AND u.username_lower > $2 AND u.id <> $3 AND NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now()) ORDER BY u.username_lower LIMIT 11`, [term + '%', after, uid]);
+      const page = rows.slice(0, 10), ids = page.map(r => r.id);
+      const rel = ids.length ? await this.db.all('SELECT requester, addressee, status FROM friendships WHERE (requester=$1 AND addressee = ANY($2::bigint[])) OR (addressee=$1 AND requester = ANY($2::bigint[]))', [uid, ids]) : [];
+      const relOf = (id) => { const r = rel.find(x => String(x.requester) === String(id) || String(x.addressee) === String(id)); if (!r) return 'none'; if (r.status === 'accepted') return 'friend'; return String(r.requester) === String(uid) ? 'outgoing' : 'incoming'; };
+      return this.send(res, 200, { players: page.map(r => ({ username: r.username, level: r.level, rank: rankOf(r.rank_points), relation: relOf(r.id) })), next: rows.length > 10 ? page[9].username_lower : null });
+    }
+    if (req.method === 'GET' && path === '/api/friends') {
+      const rows = await this.db.all(`SELECT u.id, u.username, s.level, s.rank_points, f.status, f.requester FROM friendships f
+        JOIN users u ON u.id = CASE WHEN f.requester=$1 THEN f.addressee ELSE f.requester END JOIN user_stats s ON s.user_id=u.id WHERE f.requester=$1 OR f.addressee=$1 ORDER BY u.username_lower LIMIT 300`, [uid]);
+      const out = { friends: [], incoming: [], outgoing: [] };
+      for (const r of rows) {
+        if (r.status === 'accepted') { const p = this.presence(Number(r.id)); out.friends.push({ username: r.username, level: r.level, rank: rankOf(r.rank_points), online: !!p.online, room: p.room || null, inMatch: !!p.inMatch }); }
+        else if (String(r.requester) === String(uid)) out.outgoing.push({ username: r.username }); else out.incoming.push({ username: r.username, level: r.level });
+      }
+      out.friends.sort((a, b) => (b.online - a.online) || a.username.localeCompare(b.username));
+      return this.send(res, 200, out);
+    }
+    if (req.method !== 'POST') return this.send(res, 404, { error: 'Unbekannte Route.' });
+    if (this.rl.hit('frq:' + uid, 40, 600000)) return this.send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' });
+    const b = await this.body(req), t = await this.db.one('SELECT id, username FROM users WHERE username_lower=$1', [clip(b.target, 16).toLowerCase()]);
+    if (!t) return this.send(res, 404, { error: 'Spieler nicht gefunden.' });
+    if (String(t.id) === String(uid)) return this.send(res, 400, { error: 'Das bist du selbst.' });
+    const row = await this.db.one('SELECT requester, addressee, status FROM friendships WHERE (requester=$1 AND addressee=$2) OR (requester=$2 AND addressee=$1)', [uid, t.id]);
+    const mine = row && String(row.requester) === String(uid);
+    if (path === '/api/friends/request') {
+      if (row && row.status === 'accepted') return this.send(res, 409, { error: 'Ihr seid schon befreundet.' });
+      if (row && mine) return this.send(res, 409, { error: 'Anfrage wurde schon gesendet.' });
+      if (row && !mine) { await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); return this.send(res, 200, { ok: true, accepted: true }); }   // beide wollten → sofort Freunde
+      const n = await this.db.one("SELECT (SELECT count(*) FROM friendships WHERE requester=$1 AND status='pending')::int AS pend, (SELECT count(*) FROM friendships WHERE (requester=$1 OR addressee=$1) AND status='accepted')::int AS fr", [uid]);
+      if (n.pend >= 30) return this.send(res, 400, { error: 'Zu viele offene Anfragen (max. 30).' }); if (n.fr >= 100) return this.send(res, 400, { error: 'Deine Freundesliste ist voll (max. 100).' });
+      try { await this.db.query('INSERT INTO friendships (requester, addressee) VALUES ($1,$2)', [uid, t.id]); } catch (e) { if (e.code === '23505' || /unique|duplicate/i.test(e.message)) return this.send(res, 409, { error: 'Anfrage existiert schon.' }); throw e; }
+      return this.send(res, 200, { ok: true });
+    }
+    if (path === '/api/friends/accept') {
+      if (!row || row.status !== 'pending' || mine) return this.send(res, 404, { error: 'Keine offene Anfrage von diesem Spieler.' });
+      const n = await this.db.one("SELECT count(*)::int AS fr FROM friendships WHERE (requester=$1 OR addressee=$1) AND status='accepted'", [uid]); if (n.fr >= 100) return this.send(res, 400, { error: 'Deine Freundesliste ist voll (max. 100).' });
+      await this.db.query("UPDATE friendships SET status='accepted' WHERE requester=$1 AND addressee=$2", [t.id, uid]); return this.send(res, 200, { ok: true });
+    }
+    if (path === '/api/friends/decline' || path === '/api/friends/remove') {   // Ablehnen, Anfrage zurückziehen, Freund entfernen
+      if (!row) return this.send(res, 404, { error: 'Keine Verbindung zu diesem Spieler.' });
+      await this.db.query('DELETE FROM friendships WHERE (requester=$1 AND addressee=$2) OR (requester=$2 AND addressee=$1)', [uid, t.id]); return this.send(res, 200, { ok: true });
+    }
+    return this.send(res, 404, { error: 'Unbekannte Route.' });
+  }
+
   // ---------- Inventar / Shop / Tagesbelohnung (alles serverseitig, in Transaktionen) ----------
   async inventory(user) {
     await grantUnlocks(this.db, user.id, (await this.db.one('SELECT level FROM user_stats WHERE user_id=$1', [user.id])).level);
@@ -143,6 +197,7 @@ export class Api {
         if (!t) return this.send(res, 404, { error: 'Spieler nicht gefunden.' }), true;
         return this.send(res, 200, { user: await this.publicUser(t) }), true;
       }
+      if (url.startsWith('/api/friends') || url.startsWith('/api/players/search')) return await this.friendsRoute(req, res, url, user), true;
       if (m === 'GET' && url === '/api/inventory') return this.send(res, 200, await this.inventory(user)), true;
       if (m === 'POST' && url === '/api/shop/buy') return await this.buy(req, res, user), true;
       if (m === 'POST' && url === '/api/equip') return await this.equip(req, res, user), true;

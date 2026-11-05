@@ -23,7 +23,7 @@ async function boot() {
   await engine.init(setP);
   await Promise.race([Account.init(), new Promise(r => setTimeout(r, 3500))]);   // Konten (optional): Server nicht erreichbar → Gast-Modus
   const game = new Game(engine, canvas); const ui = new UI(game); game.ui = ui; window.game = game;
-  ui.init();
+  ui.init(); ui.checkFriendRequests();
   audio.setVolumes({ master: S.master, music: S.music, sfx: S.sfx, ambient: S.ambient });
   game.enterMenu(); window.__bootMs = Math.round(performance.now());
   $('#loading').classList.add('hide'); setTimeout(() => { $('#loading').style.display = 'none'; }, 900);
