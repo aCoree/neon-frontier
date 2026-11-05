@@ -20,6 +20,8 @@ export class UI {
   }
   init() {
     const g = this.g; this.wireSocial();
+    $('#pp-leave').onclick = async () => { if (await this.confirm({ title: 'Party verlassen?', lines: ['Du verlässt die Party.'], ok: 'Verlassen', danger: true })) { const r = await Social.cmd({ k: 'party_leave' }); if (!r.ok) this.toast(r.error, 'bad'); } };
+    $('#pp-add').onclick = () => { audio.click(); this.go('friends'); };
     // Navigation
     $$('[data-go]').forEach(b => b.addEventListener('click', () => { audio.click(); this.go(b.dataset.go); }));
     $$('[data-back]').forEach(b => b.addEventListener('click', () => { audio.back(); this.back(); }));
@@ -165,25 +167,57 @@ export class UI {
         { label: 'Ablehnen', run: async () => { try { await Account.friendAction('decline', m.from); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } } }] });
     });
     Social.listen('friend_accepted', (m) => { this.toast(m.from + ' hat deine Freundschaftsanfrage angenommen!', 'good'); audio.notify(); if (this.cur === 'friends') this.refreshFriends(); });
-    Social.listen('invite', (m) => {
-      const mode = MODES[m.mode]?.name || m.mode;
-      if (quiet()) { this.toast(m.from + ' lädt dich in eine Lobby ein (' + m.code + ')', 'event'); audio.notify(); return; }
-      this.card({ id: 'inv:' + m.from, kind: 'ninv', name: m.from, title: m.from + ' lädt dich in seine Lobby ein', sub: mode + ' · ' + m.players + (m.players === 1 ? ' Spieler' : ' Spieler') + ' · Raum ' + m.code, ttl: 45, actions: [
-        { label: 'Beitreten', primary: true, run: async () => { await this.joinRoom(m.code); } }, { label: 'Ablehnen', run: async () => {} }] });
+    Social.listen('party', (m) => this.onParty(m.party));
+    Social.listen('party_event', (m) => { this.toast(m.text, 'event'); });
+    Social.listen('party_invite', (m) => {
+      if (quiet()) { this.toast(m.from + ' lädt dich in seine Party ein (Menü → Party)', 'event'); audio.notify(); return; }
+      this.card({ id: 'pi:' + m.from, kind: 'ninv', name: m.from, title: m.from + ' lädt dich in seine Party ein', sub: 'Party · ' + m.size + ' von ' + m.max + ' Plätzen belegt', ttl: m.ttl || 60, actions: [
+        { label: 'Beitreten', primary: true, run: async () => { const r = await Social.cmd({ k: 'party_accept', from: m.from }); if (r.ok) { this.toast('Du bist der Party von ' + m.from + ' beigetreten', 'good'); audio.levelUp(); } else { this.toast(r.error || 'Beitritt fehlgeschlagen', 'bad'); audio.error(); } } },
+        { label: 'Ablehnen', run: async () => { await Social.cmd({ k: 'party_decline', from: m.from }); } }] });
+    });
+    // Der Party-Leiter ist einer Lobby beigetreten → mitgehen (nicht mitten im Match)
+    Social.listen('party_join', (m) => {
+      if (quiet()) { this.toast('Party-Leiter ' + m.from + ' ist einer Lobby beigetreten – nach dem Match bitte nachkommen (Code ' + m.code + ')', 'event'); return; }
+      if (this.g.roomCode === m.code) return;
+      this.toast(m.from + ' nimmt die Party in eine Lobby mit …', 'event'); audio.notify(); this.joinRoom(m.code);
     });
   }
-  // Freund einladen: legt bei Bedarf automatisch eine private Lobby an und schickt dann die Einladung
+  // Wird nach jedem Betreten eines Raums aufgerufen: der Party-Leiter holt seine Mitglieder nach
+  afterJoined(code) { if (Social.party?.isLeader && code) Social.cmd({ k: 'party_follow', code }); }
+  // Freund in die Party einladen (die Party entsteht mit der ersten Einladung)
   async inviteFriend(name) {
-    if (!Social.connected) { this.toast('Hinweis-Dienst nicht verbunden – bitte kurz warten.', 'bad'); return false; }
-    if (!this.g.roomCode) { const ok = await this.createRoom(false); if (!ok) return false; }
-    const r = await Social.invite(name);
-    if (r.ok) { this.toast('Einladung an ' + name + ' gesendet', 'good'); audio.click(); } else { this.toast(r.error || 'Einladung fehlgeschlagen', 'bad'); audio.error(); }
+    if (!Social.connected) { this.toast('Party-Dienst nicht verbunden – bitte kurz warten.', 'bad'); return false; }
+    const r = await Social.cmd({ k: 'party_invite', target: name });
+    if (r.ok) { this.toast('Party-Einladung an ' + name + ' gesendet', 'good'); audio.click(); } else { this.toast(r.error || 'Einladung fehlgeschlagen', 'bad'); audio.error(); }
     return r.ok;
+  }
+  onParty(p) {
+    const wasIn = !!this._party; this._party = p; this.renderParty(); this.g.syncPartyChars(p);
+    if (!wasIn && p && p.members.length > 1) audio.notify();
+    if (this.cur === 'lobby') this.refreshLobbyFriends(); if (this.cur === 'friends') this.refreshFriends();
+  }
+  renderParty() {
+    const p = this._party, box = $('#party-panel'); if (!box) return; box.style.display = p ? '' : 'none'; if (!p) return;
+    $('#pp-n').textContent = p.members.length + ' / ' + p.max; const list = $('#pp-list'); list.replaceChildren();
+    for (const m of p.members) {
+      const sk = SKINS.find(x => x.id === m.skin) || SKINS[0], row = document.createElement('div'); row.className = 'pp-m';
+      const av = document.createElement('span'); av.className = 'av'; av.textContent = m.name.slice(0, 1).toUpperCase(); av.style.background = sk.armor; av.style.borderColor = sk.accent;
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m.name; const lv = document.createElement('small'); lv.textContent = 'Lv ' + m.level; nm.appendChild(lv);
+      const dot = document.createElement('span'); dot.className = 'on' + (m.online ? '' : ' off'); dot.title = m.online ? 'online' : 'Verbindung verloren';
+      row.append(av, nm); if (m.leader) { const c = document.createElement('span'); c.className = 'crown'; c.textContent = '♛'; c.title = 'Party-Leiter'; row.appendChild(c); } row.appendChild(dot);
+      if (p.isLeader && !m.you) {
+        const up = document.createElement('button'); up.textContent = '♛'; up.title = 'Zum Leiter machen'; up.onclick = async () => { const r = await Social.cmd({ k: 'party_promote', target: m.name }); if (!r.ok) this.toast(r.error, 'bad'); };
+        const kick = document.createElement('button'); kick.textContent = '✕'; kick.title = 'Aus der Party entfernen'; kick.onclick = async () => { if (await this.confirm({ title: 'Aus der Party entfernen?', lines: [m.name + ' wird aus deiner Party entfernt.'], ok: 'Entfernen', danger: true })) { const r = await Social.cmd({ k: 'party_kick', target: m.name }); if (!r.ok) this.toast(r.error, 'bad'); } };
+        row.append(up, kick);
+      }
+      list.appendChild(row);
+    }
+    $('#pp-add').style.display = p.isLeader && p.members.length < p.max ? '' : 'none';
   }
   async refreshLobbyFriends() {
     const box = $('#lobby-invite'); if (!Account.user || !Social.connected) { box.style.display = 'none'; return; }
     let d; try { d = await Account.friends(); } catch { return; }
-    const inLobby = new Set((this.lastLobby?.members || []).map(m => m.name.toLowerCase())), list = $('#lobby-friends'), online = d.friends.filter(f => f.online && !f.inMatch && !inLobby.has(f.username.toLowerCase()));
+    const inLobby = new Set([...(this.lastLobby?.members || []).map(m => m.name.toLowerCase()), ...(this._party?.members || []).map(m => m.name.toLowerCase())]), list = $('#lobby-friends'), online = d.friends.filter(f => f.online && !f.inMatch && !inLobby.has(f.username.toLowerCase()));
     box.style.display = ''; $('#lobby-invite-n').textContent = '(' + online.length + ' online)'; list.replaceChildren();
     if (!online.length) { list.innerHTML = '<div class="empty">Gerade ist kein Freund online, der eingeladen werden kann.</div>'; return; }
     for (const f of online) {
@@ -260,7 +294,7 @@ export class UI {
     const list = $('#fr-list'); list.replaceChildren(); $('#fr-total').textContent = '(' + d.friends.length + ')';
     if (!d.friends.length) list.innerHTML = '<div class="empty">Noch keine Freunde. Suche links nach Spielernamen.</div>';
     for (const f of d.friends) {
-      const acts = []; if (f.online && !f.inMatch) acts.push(['Einladen', () => this.inviteFriend(f.username)]); if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', async () => { if (await this.confirm({ title: 'Freund entfernen?', lines: [f.username + ' wird aus deiner Freundesliste entfernt.', { cls: '', text: 'Ihr könnt euch jederzeit wieder hinzufügen.' }], ok: 'Entfernen', danger: true })) act('remove', f.username)(); }]);
+      const acts = []; if (this._party?.members.some(m => m.name.toLowerCase() === f.username.toLowerCase())) acts.push(['In deiner Party', () => {}]); else if (f.online && !f.inMatch && (!this._party || this._party.isLeader)) acts.push(['Party einladen', () => this.inviteFriend(f.username)]); if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', async () => { if (await this.confirm({ title: 'Freund entfernen?', lines: [f.username + ' wird aus deiner Freundesliste entfernt.', { cls: '', text: 'Ihr könnt euch jederzeit wieder hinzufügen.' }], ok: 'Entfernen', danger: true })) act('remove', f.username)(); }]);
       list.appendChild(row(f.username, `<span style="width:10px;height:10px;border-radius:50%;background:${f.online ? 'var(--good)' : '#556'};box-shadow:${f.online ? '0 0 8px var(--good)' : 'none'}"></span><b class="fn"></b><small>Lv ${f.level} · ${f.rank} · ${f.online ? (f.inMatch ? 'im Match' : f.room ? 'in einer Lobby' : 'online') : 'offline'}</small>`, acts));
     }
     const inn = $('#fr-in'); inn.replaceChildren(); if (!d.incoming.length) inn.innerHTML = '<div class="empty">Keine offenen Anfragen.</div>';

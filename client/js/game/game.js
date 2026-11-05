@@ -72,7 +72,7 @@ export class Game {
   bindNet(n) {
     const on = (k, f) => n.on(k, f.bind(this));
     n.onBytes = (b) => this.engine.perf && this.engine.perf.netBytes(b);
-    on('joined', (m) => { this.roomCode = m.code; this.myId = m.you; this.isHost = m.host === m.you; this.you = 'p' + m.you; if (m.resumed) this.ui.toast('Wieder verbunden!', 'good'); });
+    on('joined', (m) => { this.ui.afterJoined(m.code); this.roomCode = m.code; this.myId = m.you; this.isHost = m.host === m.you; this.you = 'p' + m.you; if (m.resumed) this.ui.toast('Wieder verbunden!', 'good'); });
     on('lobby', (m) => { this.lobby = m; this.isHost = m.host === this.myId; if (this.mode === 'play' && (this.matchEnded || m.state === 'lobby')) { this.endMatchLocal(); this.enterMenu(); document.getElementById('results').classList.remove('show'); } this.ui.setLobby(m, this.myId); });
     on('start', (m) => this.onStart(m));
     on('snap', (m) => this.onSnap(m));
@@ -133,7 +133,7 @@ export class Game {
     this.char = new Character(me?.skin || Progress.d.skin, me?.wskin || Progress.d.wskin); this.scene.add(this.char.root); this.char.root.visible = false;
     if (me && me.team >= 0) this.char.setTeamColor(TEAMS[me.team].hex);
     this.char.setWeapon('viper'); this.char.equipT = 1; this.myTeam = me ? me.team : -1;
-    if (this.menuChar) this.menuChar.root.visible = false;
+    if (this.menuChar) this.menuChar.root.visible = false; this.partyCharsVisible(false);
   }
   clearTransient() {
     for (const p of this.projs) this.scene.remove(p.mesh); this.projs = []; this.smokes = []; for (const s of this.supplies) this.scene.remove(s.g); this.supplies = [];
@@ -494,6 +494,28 @@ export class Game {
   }
   refreshMenuChar() { if (this.menuChar) { this.scene.remove(this.menuChar.root); this.menuChar = null; } this.ensureMenuChar(); this.menuChar.root.visible = this.mode === 'menu'; }
   setMenuView(m) { this.menuMode = m; }
+  // Party-Mitglieder stehen im Hauptmenü neben dir (wie bei Fortnite); Skin und Waffe stammen vom Server-Zustand der Party
+  syncPartyChars(p) {
+    this.partyChars = this.partyChars || new Map(); const want = new Map();
+    if (p) { let i = 0; for (const m of p.members) if (!m.you) { want.set(m.name, { m, slot: i++ }); } }
+    for (const [name, c] of [...this.partyChars]) { const w = want.get(name); if (!w || c.skin !== w.m.skin || c.wskin !== w.m.wskin) { this.scene.remove(c.char.root); this.scene.remove(c.plate); c.plate.material.map.dispose(); c.plate.material.dispose(); this.partyChars.delete(name); } }
+    for (const [name, w] of want) {
+      let c = this.partyChars.get(name);
+      if (!c) { const ch = new Character(w.m.skin, w.m.wskin); ch.setWeapon(['viper', 'striker', 'hornet'][w.slot % 3]); ch.equipT = 1; this.scene.add(ch.root); c = { char: ch, skin: w.m.skin, wskin: w.m.wskin, plate: this.partyPlate(name, w.m.leader) }; this.scene.add(c.plate); this.partyChars.set(name, c); }
+      c.slot = w.slot;
+    }
+    this.partyCharsVisible(this.mode === 'menu');
+  }
+  partyPlate(name, leader) {
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64; const x = cv.getContext('2d'); x.font = '800 30px "Trebuchet MS", Arial, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = '#000'; x.shadowBlur = 6; x.fillStyle = '#ffffff'; x.fillText((leader ? '♛ ' : '') + name, 128, 32);
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: false, depthWrite: false, fog: false })); sp.scale.set(1.5, 0.375, 1); sp.renderOrder = 10; return sp;
+  }
+  partyCharsVisible(v) { if (this.partyChars) for (const c of this.partyChars.values()) c.char.root.visible = c.plate.visible = v && this.menuMode !== 'skins'; }
+  updatePartyChars(dt) {
+    if (!this.partyChars || !this.partyChars.size) return; const SLOTS = [[-1.2, -0.35, -0.2], [1.25, -0.45, -0.55], [2.4, -1.0, -0.65]];
+    for (const c of this.partyChars.values()) { const s = SLOTS[c.slot % SLOTS.length]; c.char.root.position.set(MENU_POS.x + s[0], MENU_POS.y, MENU_POS.z + s[1]); c.char.root.rotation.y = s[2]; c.char.root.visible = c.plate.visible = this.mode === 'menu' && this.menuMode !== 'skins'; c.plate.position.set(MENU_POS.x + s[0], MENU_POS.y + 2.2, MENU_POS.z + s[1]); c.char.update(dt, { speed: 0, grounded: true, pitch: 0 }); }
+  }
 
   // =================== Frame ===================
   frame(dt) {
@@ -527,7 +549,7 @@ export class Game {
   }
   updateMenu(dt) {
     this.menuT += dt; const mc = this.menuChar; if (!mc) return;
-    mc.update(dt, { speed: 0, grounded: true, pitch: 0 });
+    mc.update(dt, { speed: 0, grounded: true, pitch: 0 }); this.updatePartyChars(dt);
     const target = new THREE.Vector3(MENU_POS.x, MENU_POS.y + (this.menuMode === 'skins' ? 1.0 : 1.25), MENU_POS.z);
     let a, dist, h;
     if (this.menuMode === 'skins') { a = this.menuT * 0.5 + 0.3; dist = 3.2; h = 1.35; mc.root.rotation.y = 0; }

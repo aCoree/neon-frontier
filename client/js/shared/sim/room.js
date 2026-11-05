@@ -46,7 +46,7 @@ export class Room {
   // =============== Lobby ===============
   addMember(client, profile) {
     const id = idc++;
-    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, userId: profile.userId || null, role: profile.role || 'PLAYER', muted: new Set(), lastChat: 0, chatBurst: 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
+    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, userId: profile.userId || null, party: profile.party | 0, role: profile.role || 'PLAYER', muted: new Set(), lastChat: 0, chatBurst: 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
     this.members.set(id, m);
     if (this.hostId == null || !this.members.get(this.hostId)?.connected) this.hostId = id;
     this.emptyAt = 0;
@@ -140,11 +140,13 @@ export class Room {
     const mode = MODES[this.settings.mode]; if (!mode.teams) return;
     const cnt = new Array(mode.teams).fill(0);
     for (const x of this.members.values()) if (x.team >= 0 && x.team < mode.teams) cnt[x.team]++; else x.team = -1;
+    const partyTeam = new Map(); for (const x of this.members.values()) if (x.team >= 0 && x.party && !partyTeam.has(x.party)) partyTeam.set(x.party, x.team);
     for (const x of this.members.values()) {
       if (x.team >= 0) continue;
-      let best = -1;
-      for (let t = 0; t < mode.teams; t++) if ((!mode.size || cnt[t] < mode.size) && (best < 0 || cnt[t] < cnt[best])) best = t;
-      if (best < 0) best = 0; x.team = best; cnt[best]++;
+      let best = -1; const pt = x.party ? partyTeam.get(x.party) : undefined;
+      if (pt !== undefined && (!mode.size || cnt[pt] < mode.size)) best = pt;   // Party bleibt zusammen, solange im Team Platz ist
+      else for (let t = 0; t < mode.teams; t++) if ((!mode.size || cnt[t] < mode.size) && (best < 0 || cnt[t] < cnt[best])) best = t;
+      if (best < 0) best = 0; x.team = best; cnt[best]++; if (x.party && !partyTeam.has(x.party)) partyTeam.set(x.party, best);
     }
   }
 

@@ -45,6 +45,11 @@
     <div class="pc-rank" id="pc-rank"></div>
     <div class="pc-acct"><button class="link" id="pc-rename">Name ändern</button> <button class="link" id="pc-login">Anmelden / Registrieren</button> <button class="link" id="pc-daily" style="display:none;color:var(--c3)">🎁 Tagesbelohnung abholen</button> <button class="link" id="pc-logout" style="display:none">Abmelden</button></div>
     <div class="pc-since" id="pc-since"></div>
+    <div class="party-panel" id="party-panel" style="display:none">
+      <div class="pp-h"><b>PARTY</b><small id="pp-n"></small><button class="link" id="pp-leave">Verlassen</button></div>
+      <div id="pp-list"></div>
+      <button class="btn small" id="pp-add">+ Freund einladen</button>
+    </div>
   </div>
 </section>
 
@@ -174,7 +179,7 @@
       <div class="lobby-col">
         <h4>Spieler <small id="lobby-count"></small></h4>
         <div id="lobby-teams"></div>
-        <div id="lobby-invite" style="display:none"><h4>Freunde einladen <small id="lobby-invite-n"></small></h4><div class="rooms" id="lobby-friends" style="max-height:170px"></div></div>
+        <div id="lobby-invite" style="display:none"><h4>Freunde in die Party einladen <small id="lobby-invite-n"></small></h4><div class="rooms" id="lobby-friends" style="max-height:170px"></div></div>
         <div class="row"><button class="btn small" id="lobby-shuffle">Teams automatisch zuteilen</button></div>
         <h4>Chat</h4>
         <div class="chatbox" id="lobby-chat"></div>

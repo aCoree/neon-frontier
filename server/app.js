@@ -8,6 +8,7 @@ import { Room } from '../client/js/shared/sim/room.js';
 import { MODES } from '../client/js/shared/defs.js';
 import { Api } from './lib/api.js';
 import { Analytics } from './lib/analytics.js';
+import { Parties } from './lib/party.js';
 import { applyMatchResult } from './lib/progression.js';
 import { can, filterText } from './lib/auth.js';
 
@@ -30,6 +31,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   }
   const sockets = new Map();   // userId -> Anzahl offener WebSocket-Verbindungen (angemeldet)
   const social = new Map();    // userId -> Set(client): dauerhafte „Social“-Verbindung im Menü (Echtzeit-Hinweise, Einladungen)
+  const parties = new Parties({ send: (id, m) => notify(id, m), isOnline: (id) => (social.get(Number(id))?.size || 0) > 0 });
   const notify = (userId, msg) => { const s = social.get(Number(userId)); if (!s || !s.size) return false; for (const c of s) c.send(msg); return true; };
   const presence = (userId) => {
     const online = (sockets.get(userId) || 0) > 0; if (!online) return { online: false };
@@ -41,7 +43,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   api = new Api({
     db, stats, notify, config, log, presence, metrics: () => metricsSnapshot(),
     rooms: () => [...rooms.values()].map(r => ({ code: r.code, state: r.state, mode: r.settings.mode, players: r.humans().length, matchId: r.matchId })),
-    onBan: (userId, reason) => { for (const c of [...(social.get(userId) || [])]) { c.send({ k: 'err', code: 'banned', text: 'Dein Konto wurde gesperrt.' }); c.close(); } for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
+    onBan: (userId, reason) => { parties.leave(userId); for (const c of [...(social.get(userId) || [])]) { c.send({ k: 'err', code: 'banned', text: 'Dein Konto wurde gesperrt.' }); c.close(); } for (const r of rooms.values()) for (const m of r.members.values()) if (m.userId === userId && m.client) { m.client.send({ k: 'kicked', text: 'Dein Konto wurde gesperrt: ' + reason }); m.client.close && m.client.close(); } },
   });
   const newCode = () => { for (let i = 0; i < 200; i++) { let c = ''; for (let k = 0; k < 4; k++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; if (!rooms.has(c)) return c; } return 'R' + Date.now().toString(36).slice(-3).toUpperCase(); };
 
@@ -100,19 +102,16 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
         if (msg.social) {   // reine Hinweis-Verbindung: nur für angemeldete Spieler, höchstens 5 pro Konto, kann keine Räume betreten
           if (!acct) { client.send({ k: 'err', code: 'nosocial', text: 'Nicht angemeldet.' }); client.close(); return; }
           const set = social.get(profile.userId) || new Set(); if (set.size >= 5) { client.send({ k: 'err', code: 'toomany', text: 'Zu viele Verbindungen.' }); client.close(); return; }
-          set.add(client); social.set(profile.userId, set); client.social = true; profile.social = true;
+          set.add(client); social.set(profile.userId, set); client.social = true; profile.social = true; parties.touch(profile.userId, { name: profile.name, level: profile.level, skin: profile.skin, wskin: profile.wskin });
         }
         if (acct && profile.userId && !client.counted) { client.counted = profile.userId; sockets.set(profile.userId, (sockets.get(profile.userId) || 0) + 1); }
         client.send({ k: 'welcome', v: 2, serverTime: Date.now(), account: !!acct, name: profile.name, role: acct ? acct.role : 'GUEST' }); return;
       }
-      if (client.social) {   // Social-Verbindungen dürfen nur einladen
-        if (msg.k === 'invite') await handleInvite(msg);
-        return;
-      }
+      if (client.social) { await handleSocial(msg); return; }   // Social-Verbindungen verstehen nur party_*-Befehle
       if (msg.k === 'create') {
         if (!profile) return; if (room) leave();
         const code = newCode(), hooks = hooksFor(); room = new Room(code, { settings: msg.settings, hooks }); hooks.room = room;
-        rooms.set(code, room); member = room.addMember(client, profile); loadMutes();
+        rooms.set(code, room); profile.party = parties.partyIdOf(profile.userId); member = room.addMember(client, profile); loadMutes();
         log.log(`[room ${code}] erstellt von ${member.name}`); return;
       }
       if (msg.k === 'join') {
@@ -121,7 +120,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
         if (!r) return client.send({ k: 'err', code: 'noroom', text: `Raum „${code}“ nicht gefunden.` });
         if (r.humans().length >= (r.state === 'lobby' ? 12 : MODES[r.settings.mode].max)) return client.send({ k: 'err', code: 'full', text: 'Der Raum ist voll.' });
         if (room) leave();
-        room = r; member = r.addMember(client, profile); loadMutes(); log.log(`[room ${code}] ${member.name} beigetreten`); return;
+        room = r; profile.party = parties.partyIdOf(profile.userId); member = r.addMember(client, profile); loadMutes(); log.log(`[room ${code}] ${member.name} beigetreten`); return;
       }
       if (msg.k === 'resume') {
         const r = rooms.get(String(msg.code || '').toUpperCase()), m = r && r.members.get(msg.id | 0);
@@ -132,20 +131,31 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       if (msg.k === 'refreshmutes') { loadMutes(); return; }
       if (room && member) room.handle(member, msg);
     }
-    // Einladung in die eigene Lobby: nur an akzeptierte Freunde, nur wenn sie online sind, begrenzte Rate
-    async function handleInvite(msg) {
-      const target = String(msg.target || '').slice(0, 16), reply = (ok, error) => client.send({ k: 'invite_result', ok, target, error });
+    // Party-Befehle über die Social-Verbindung. Alle Rechte prüft der Server: nur Freunde einladen, nur der Leiter lädt ein/entfernt/nimmt mit.
+    async function handleSocial(msg) {
+      const uid = profile.userId, reply = (ok, error, extra) => client.send({ k: 'party_result', action: msg.k, ok, error, ...extra });
+      if (!msg.k.startsWith('party_')) return;
       if (!api.flags.friends) return reply(false, 'Das Freunde-System ist gerade deaktiviert.');
-      if (api.rl.hit('invite:' + profile.userId, 30, 60000)) return reply(false, 'Zu viele Einladungen. Bitte kurz warten.');
-      const t = await api.friendByName(profile.userId, target); if (!t) return reply(false, 'Du kannst nur Freunde einladen.');
-      let rm = null; for (const r of rooms.values()) if (r.state === 'lobby') for (const m of r.members.values()) if (m.userId === profile.userId && m.connected) rm = r;
-      if (!rm) return reply(false, 'Du bist in keiner Lobby.');
-      if ([...rm.members.values()].some(m => m.userId === Number(t.id) && m.connected)) return reply(false, t.username + ' ist schon in deiner Lobby.');
-      if (rm.humans().length >= 12) return reply(false, 'Die Lobby ist voll.');
-      if (api.rl.hit(`invite:${profile.userId}:${t.id}`, 3, 60000)) return reply(false, 'Du hast ' + t.username + ' gerade erst eingeladen.');
-      if (!social.get(Number(t.id))?.size) return reply(false, t.username + ' ist gerade offline.');
-      await api.push(Number(t.id), { id: profile.userId }, { k: 'invite', from: profile.name, code: rm.code, mode: rm.settings.mode, players: rm.humans().length });   // stumm geschaltet = still verworfen
-      stats.inc('invite'); reply(true);
+      if (api.rl.hit('party:' + uid, 60, 60000)) return reply(false, 'Zu viele Anfragen. Bitte kurz warten.');
+      const name = String(msg.target ?? msg.from ?? '').slice(0, 16);
+      switch (msg.k) {
+        case 'party_invite': {
+          if (api.rl.hit('pinv:' + uid, 20, 60000)) return reply(false, 'Zu viele Einladungen. Bitte kurz warten.');
+          const t = await api.friendByName(uid, name); if (!t) return reply(false, 'Du kannst nur Freunde einladen.');
+          if ((await api.mutedBy(Number(t.id))).has(String(uid))) return reply(true, undefined, { target: t.username });   // stumm geschaltet = still verworfen
+          const r = parties.invite(uid, { id: Number(t.id), name: t.username }); if (r.ok) stats.inc('party_invite'); return reply(r.ok, r.error, { target: t.username });
+        }
+        case 'party_accept': { const r = parties.accept(uid, name); if (r.ok) stats.inc('party_join'); return reply(r.ok, r.error); }
+        case 'party_decline': return reply(parties.decline(uid, name).ok);
+        case 'party_leave': return reply(parties.leave(uid).ok);
+        case 'party_kick': { const r = parties.kick(uid, name); return reply(r.ok, r.error); }
+        case 'party_promote': { const r = parties.promote(uid, name); return reply(r.ok, r.error); }
+        case 'party_follow': {   // Leiter ist einer Lobby beigetreten → Server prüft, dass er wirklich dort ist
+          const rm = rooms.get(String(msg.code || '').toUpperCase());
+          if (!rm || rm.state !== 'lobby' || ![...rm.members.values()].some(m => m.userId === uid && m.connected)) return reply(false, 'Du bist in keiner Lobby.');
+          const r = parties.follow(uid, rm.code); return reply(r.ok, r.error, { notified: r.notified });
+        }
+      }
     }
     function loadMutes() { const m = member; if (m && m.userId) api.mutedBy(m.userId).then(s => { m.muted = s; }).catch(() => {}); }
 
@@ -158,7 +168,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       chain = chain.then(() => onMessage(msg)).catch((e) => { M.errors++; log.error('Fehler bei Nachricht', msg.k, e); });  // Nachrichten pro Verbindung strikt nacheinander
     });
     function leave() { if (room && member) { try { room.removeMember(member, true); } catch (e) { log.error(e); } } room = null; member = null; }
-    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) social.delete(profile.userId); } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
+    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) { social.delete(profile.userId); parties.drop(profile.userId); } } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
     ws.on('error', () => {});
   });
 
@@ -171,7 +181,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   const pingTimer = setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; try { ws.ping(); } catch { /* ignore */ } } }, 15000);
 
   return {
-    server, api, rooms, wss, stats,
+    server, api, rooms, wss, stats, parties,
     async start(port) { await api.init(); stats.start(); await new Promise(r => server.listen(port, r)); return server.address().port; },
     async stop() { await stats.stop().catch(() => {}); clearInterval(tickTimer); clearInterval(pingTimer); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(r => server.close(r)); },
   };

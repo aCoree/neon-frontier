@@ -176,3 +176,9 @@ input:focus{border-color:var(--c1);box-shadow:0 0 12px rgba(126,232,255,.25)}
 /* Party-Karten in der Lobby */
 .pl .av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font:900 14px var(--disp);color:#fff;border:2px solid transparent;flex:none}.pl.you{background:rgba(126,232,255,.07)}.pl .crown{color:#ffd25a;font-size:16px}
 #lobby-invite .room{padding:6px 12px}
+
+/* Party */
+.party-panel{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.pp-h{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}.pp-h b{font:800 14px var(--disp);letter-spacing:.2em;color:var(--c1)}.pp-h small{color:var(--dim);font:700 13px var(--font)}.pp-h .link{margin-left:auto}
+.pp-m{display:flex;align-items:center;gap:8px;padding:5px 0}.pp-m .av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:900 13px var(--disp);color:#fff;border:2px solid var(--c1);flex:none}.pp-m .nm{font:800 15px var(--font);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pp-m .nm small{color:var(--dim);font:600 12px var(--font);margin-left:6px}
+.pp-m .on{width:8px;height:8px;border-radius:50%;background:var(--good,#4dff8a);box-shadow:0 0 6px var(--good,#4dff8a)}.pp-m .on.off{background:#556;box-shadow:none}.pp-m .crown{color:#ffd25a}.pp-m button{background:none;border:1px solid var(--line);color:var(--txt);padding:1px 7px;cursor:pointer;font:700 12px var(--font)}.pp-m button:hover{border-color:var(--c1)}
+#pp-add{width:100%;margin-top:6px}
