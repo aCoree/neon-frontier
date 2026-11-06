@@ -21,7 +21,7 @@ export class Engine {
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1;
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(72, 1, 0.1, 1400);
+    this.camera = new THREE.PerspectiveCamera(72, 1, 0.2, 1400);
     this.camera.position.set(0, 20, 0);
     this.scene.add(this.camera);
     this.time = 0; this.dyn = 1; this.settings = null; this.partDensity = 1; this.lastRenderMs = 0;

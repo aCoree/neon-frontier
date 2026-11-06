@@ -620,9 +620,24 @@ export class Game {
       for (const s of this.map.switches) { const sw = this.view.switchMeshes.get(s.id); const d = Math.hypot(s.x - p.x, s.z - p.z); if (d < 2.6 && Math.abs(s.y - p.y) < 2.5 && d < bd && !(s.once && sw && sw.on)) { bd = d; best = { t: 'switch', id: s.id, text: s.label }; } }
       for (const sp of this.map.secrets) if (sp.id === 'duck' && !Progress.d.ach.duck) { const d = Math.hypot(sp.x - p.x, sp.z - p.z); if (d < 3 && Math.abs(sp.y - p.y) < 2.5 && d < bd) { bd = d; best = { t: 'duck', id: 'duck', text: 'Etwas Glänzendes aufheben …' }; } }
     }
+    // Inventar voll: Waffe/Gadget am Boden gegen die aktuelle tauschen (E)
+    if (this.alive && !best) {
+      const full = this.combat.weapons.length >= 5;
+      for (const [id, it] of this.pickups.items) {
+        const q = it.p; if (!it.on || (q.kind !== 'weapon' && q.kind !== 'gadget')) continue;
+        if (Math.abs(q.x - p.x) > 1.8 || Math.abs(q.z - p.z) > 1.8 || Math.abs(q.y - p.y) > 2.4) continue;
+        const d = Math.hypot(q.x - p.x, q.z - p.z); if (d >= bd) continue;
+        if (q.kind === 'weapon' && full && !this.combat.weapons.includes(q.item)) { bd = d; best = { t: 'swap', id, text: 'Inventar voll – tauschen gegen ' + (WEAPONS[q.item]?.name || q.item) + ' (V = aktuelle Waffe droppen)' }; }
+        else if (q.kind === 'gadget' && this.gadget && this.gadget !== q.item) { bd = d; best = { t: 'swap', id, text: 'Gadget tauschen: ' + (GADGETS[q.item]?.name || q.item) }; }
+      }
+    }
     this.interact = best;
+    if (this.alive && this.ctrlNow() && this.input.hit('KeyV')) {   // aktuelle Waffe droppen
+      const w = this.combat.id; if (w === 'viper' || w === 'blade') this.ui.toast('Diese Waffe kann nicht gedroppt werden.', 'bad'); else { this.send({ k: 'dropw' }); audio.swap && audio.swap(); }
+    }
     if (best && this.ctrlNow() && this.input.hit('KeyE')) {
-      if (best.t === 'duck') { this.send({ k: 'interact', t: 'duck' }); this.ui.toast('Die GOLDENE ENTE! Quak!', 'event'); audio.pickup('shard'); }
+      if (best.t === 'swap') { this.send({ k: 'interact', t: 'swap', id: best.id }); audio.pickup('weapon'); }
+      else if (best.t === 'duck') { this.send({ k: 'interact', t: 'duck' }); this.ui.toast('Die GOLDENE ENTE! Quak!', 'event'); audio.pickup('shard'); }
       else this.send({ k: 'interact', t: best.t, id: best.id });
     }
   }

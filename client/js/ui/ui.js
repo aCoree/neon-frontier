@@ -22,6 +22,11 @@ export class UI {
   }
   init() {
     const g = this.g; this.wireSocial(); this.map = new BigMap(g);
+    $('#tab-play').onclick = () => { audio.click(); this.showScreen('menu'); };
+    $('#find').onclick = () => this.findClick();
+    $('#h-season').onclick = $('#h-board').onclick = () => { audio.click(); if (Account.user) this.go('season'); else this.go('login'); };
+    $('#hr-switch').onclick = (e) => { e.stopPropagation(); audio.click(); Progress.d.settings.mmRanked = !Progress.d.settings.mmRanked; Progress.save(); this.renderHome(); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && this.cur === 'menu' && !$('#dlg').classList.contains('show') && !/INPUT|TEXTAREA|BUTTON|SELECT|A/.test(e.target?.tagName || '')) { e.preventDefault(); this.findClick(); } });
     $('#pp-leave').onclick = async () => { if (await this.confirm({ title: 'Party verlassen?', lines: ['Du verlässt die Party.'], ok: 'Verlassen', danger: true })) { const r = await Social.cmd({ k: 'party_leave' }); if (!r.ok) this.toast(r.error, 'bad'); } };
     $('#pp-add').onclick = () => { audio.click(); this.go('friends'); };
     // Navigation
@@ -73,7 +78,7 @@ export class UI {
     if (name !== 'profile' && this.g.menuOverride) { this.g.menuOverride = null; this.g.refreshMenuChar(); }
     $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; if (name) $('#' + (name === 'hud' ? 'hud' : 's-' + name)).classList.add('show');
-    if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); }
+    if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); this.loadHome(); }
     if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
@@ -129,19 +134,78 @@ export class UI {
     const dl = Account.inv && Account.inv.daily; $('#pc-daily').style.display = u && dl && dl.enabled && dl.canClaim ? '' : 'none';
     $('#pc-rename').style.display = u ? 'none' : ''; $('#pc-logout').style.display = u ? '' : 'none'; $('#pc-login').style.display = !u && Account.available ? '' : 'none';
     $('#pc-since').onclick = $('#pc-name').onclick = () => { if (Account.user) { audio.click(); this.openProfile(null); } };
-    const ss = $('#season-sub'); if (ss) ss.textContent = u ? 'Rangliste & Belohnungen' : 'Mit Konto: Rangliste & Belohnungen';
+    this.renderHome();
     $('#ach-count').textContent = `${Object.keys(d.ach).length} / ${ACHIEVEMENTS.length}`;
   }
   ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
 
   updateSocialDot() {
-    const el = $('#fr-conn'); if (!el) return; const on = Social.connected;
+    this.renderHome(); const el = $('#fr-conn'); if (!el) return; const on = Social.connected;
     el.innerHTML = '<span class="sdot' + (on ? ' on' : '') + '"></span>' + (on ? 'Echtzeit-Verbindung aktiv' : (Account.user ? 'Verbinde Echtzeit-Dienst …' : ''));
   }
   showBuild() {
     const el = $('#build-info'); if (!el) return; const srv = Account.serverBuild;
     el.textContent = '· Build ' + BUILD + (srv ? ' · Server ' + srv : ''); el.classList.toggle('warn', !!srv && srv !== BUILD);
     el.title = srv && srv !== BUILD ? 'Spiel und Server haben unterschiedliche Versionen: Seite mit Strg+Shift+R neu laden bzw. den Server (Render) neu deployen.' : 'Spiel- und Server-Version';
+  }
+
+  // ---------- Hauptmenü (Home) ----------
+  async loadHome() {
+    if (!Account.user) { this._season = null; this.renderHome(); return; }
+    if (Date.now() - (this._homeT || 0) < 15000) return; this._homeT = Date.now();
+    try { this._season = await Account.season(); } catch { /* optional */ } this.renderHome();
+  }
+  homeMode() {
+    const modes = ['ffa', 'tdm', 'duel', 'v2', 'v3'], TEAM = { duel: 1, v2: 2, v3: 3 }, size = this._party ? this._party.members.length : 1;
+    let m = Progress.d.settings.mmMode; if (!modes.includes(m) || (TEAM[m] && size > TEAM[m])) m = modes.find(x => !TEAM[x] || size <= TEAM[x]);
+    return { modes, TEAM, size, mode: m };
+  }
+  findClick() {
+    if (!Account.user) { audio.click(); this.go('solo'); return; }
+    if (this._mm) { audio.back(); Social.cmd({ k: 'mm_cancel' }).then(r => { if (!r.ok) this.toast(r.error, 'bad'); }); return; }
+    const p = this._party; if (p && !p.isLeader) { this.toast('Nur der Party-Leiter kann die Suche starten.', 'bad'); return; }
+    if (!Social.connected) { this.toast('Verbinde … bitte kurz warten.', 'bad'); return; }
+    audio.click(); const { mode } = this.homeMode();
+    Social.cmd({ k: 'mm_queue', mode, ranked: !!Progress.d.settings.mmRanked }).then(r => { if (!r.ok) { this.toast(r.error || 'Suche fehlgeschlagen', 'bad'); audio.error(); } });
+  }
+  renderHome() {
+    const home = $('#s-menu'); if (!home) return; const u = Account.user, d = Progress.d, s = u?.stats, se = this._season;
+    const RANKC = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' };
+    // Währungen & Werte oben rechts
+    $('#cur-coins').textContent = u ? (u.stats.currency ?? 0).toLocaleString('de-DE') : '–';
+    const rk = s ? s.rank : '–', col = RANKC[rk] || '#8fa6c4'; $('#cur-rank-badge').textContent = rk.slice(0, 1); $('#cur-rank-badge').style.background = col; $('#cur-rank-v').textContent = s ? rk + ' · ' + s.rankPoints : 'kein Rang';
+    $('#cur-season').textContent = se && se.enabled ? se.me.points : (u ? 0 : '–');
+    $('#hm-name3d').textContent = u ? u.username : (d.name || 'Spieler');
+    // Season-Karte
+    const tiers = se?.tiers || [], pts = se?.me.points || 0, reached = tiers.filter(t => pts >= t.points).length, claimable = se ? tiers.filter((t, i) => pts >= t.points && !se.me.claimed.includes(i)).length : 0, nxt = tiers.find(t => t.points > pts);
+    const card = $('#h-season'); card.style.display = '';
+    if (!u) { $('#hs-tier').textContent = '–'; $('#hs-name').textContent = 'Mit Konto: Season, Rang & Matchmaking'; $('#hs-fill').style.width = '0%'; $('#hs-sub').textContent = 'Tippen zum Anmelden / Registrieren'; }
+    else if (se && se.enabled) {
+      $('#hs-tier').textContent = reached; $('#hs-name').textContent = se.season.name; const prev = reached ? tiers[reached - 1].points : 0;
+      $('#hs-fill').style.width = (nxt ? 100 * (pts - prev) / (nxt.points - prev) : 100) + '%';
+      $('#hs-sub').textContent = claimable ? '🎁 ' + claimable + ' Belohnung' + (claimable > 1 ? 'en' : '') + ' abholbar!' : (nxt ? (nxt.points - pts) + ' Punkte bis Stufe ' + (reached + 1) : 'Alle Stufen erreicht!');
+    } else { $('#hs-tier').textContent = '…'; $('#hs-name').textContent = 'Season'; $('#hs-fill').style.width = '0%'; $('#hs-sub').textContent = se && !se.enabled ? 'Seasons sind gerade deaktiviert' : 'Lädt …'; }
+    $('#season-sub').textContent = claimable ? '● ' + claimable : '';
+    // Podest (Top 3)
+    const pod = $('#podium'); pod.replaceChildren(); const top = se?.top || [];
+    for (const [i, cls] of [[1, 'p2'], [0, 'p1'], [2, 'p3']]) { const r = top[i]; if (!r) continue; const c = document.createElement('div'); c.className = 'pod ' + cls; const b = document.createElement('b'); b.textContent = r.name; const n = document.createElement('i'); n.textContent = i + 1; c.append(b, n); pod.appendChild(c); }
+    if (!top.length) { const e = document.createElement('div'); e.style.cssText = 'font:700 13px var(--font);opacity:.9;align-self:center'; e.textContent = u ? 'Noch niemand gewertet – spiel ein Match!' : 'Melde dich an, um die Rangliste zu sehen'; pod.appendChild(e); }
+    $('#hb-info').textContent = se && se.me.position ? 'Du: Platz ' + se.me.position + ' · ' + pts + ' Punkte' : (se?.top?.length ? top.length + ' Spieler gewertet' : '');
+    // Ranked-Karte
+    const { modes, TEAM, size, mode } = this.homeMode(), on = !!d.settings.mmRanked, LBL = { ffa: 'FFA', tdm: 'TDM', duel: '1v1', v2: '2v2', v3: '3v3' };
+    const badge = $('#hr-badge'); badge.textContent = s ? s.rank.slice(0, 1) : '?'; badge.style.background = s ? col : '#c9a0a8';
+    const sw = $('#hr-switch'); sw.setAttribute('aria-checked', on); $('#hr-state').textContent = on ? 'AN' : 'AUS';
+    $('#hr-sub').textContent = !u ? 'Mit Konto: Rang sammeln' : (s.rank + ' · ' + s.rankPoints + ' RP' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : '')) + (on ? ' – nur gegen echte Spieler' : ' – lockeres Spiel, keine Rangpunkte');
+    const chips = $('#hr-chips'); chips.replaceChildren();
+    for (const m of modes) { const c = document.createElement('button'); c.className = 'chip' + (m === mode ? ' on' : '') + (TEAM[m] && size > TEAM[m] ? ' locked' : ''); c.textContent = LBL[m]; c.title = MODES[m]?.name || m; c.onclick = () => { audio.click(); d.settings.mmMode = m; Progress.save(); this.renderHome(); }; chips.appendChild(c); }
+    // Match finden
+    const f = $('#find'), t = $('#find-t'), sub = $('#mm-sub'), p = this._party, mm = this._mm;
+    f.classList.toggle('busy', !!mm); f.disabled = false; sub.textContent = '';
+    if (!u) { t.textContent = 'Spielen'; sub.textContent = 'Als Gast gegen Bots – für Online-Matches anmelden'; }
+    else if (mm) { const w = mm.waited | 0; t.textContent = 'Suche abbrechen'; sub.textContent = (mm.ranked ? 'Ranked · ' : '') + (MODES[mm.mode]?.name || mm.mode) + ' · ' + mm.found + '/' + mm.cap + ' Spieler · ' + Math.floor(w / 60) + ':' + String(w % 60).padStart(2, '0'); f.disabled = !!p && !p.isLeader; }
+    else if (p && !p.isLeader) { t.textContent = 'Leiter sucht'; sub.textContent = 'Nur der Party-Leiter startet die Suche'; f.disabled = true; }
+    else if (!Social.connected) { t.textContent = 'Verbinde …'; sub.textContent = 'Echtzeit-Dienst wird verbunden'; f.disabled = true; }
+    else { t.textContent = 'Match finden'; sub.textContent = (on ? 'Ranked · ' : 'Locker · ') + (MODES[mode]?.name || mode) + (p ? ' · Party (' + size + ')' : ''); }
   }
 
   // ---------- Profil-Bildschirm ----------
@@ -222,7 +286,7 @@ export class UI {
   wireSocial() {
     const quiet = () => this.inMatchNow();   // im Match: Maus ist gesperrt → nur kurzer Hinweis ohne Knöpfe
     Social.listen('friend_request', (m) => {
-      if (this.cur === 'friends') this.refreshFriends(); $('#fr-count').textContent = 'Neue Anfrage!';
+      if (this.cur === 'friends') this.refreshFriends(); $('#fr-count').textContent = '● neu';
       if (quiet()) { this.toast(m.from + ' möchte dich als Freund hinzufügen (Menü → Freunde)', 'event'); audio.notify(); return; }
       this.card({ id: 'fr:' + m.from, name: m.from, title: m.from + ' möchte dich als Freund hinzufügen', sub: 'Level ' + (m.level || 1), ttl: 30, actions: [
         { label: 'Annehmen', primary: true, run: async () => { try { await Account.friendAction('accept', m.from); this.toast(m.from + ' ist jetzt dein Freund!', 'good'); audio.levelUp(); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } } },
@@ -263,7 +327,7 @@ export class UI {
       c.onclick = () => { if (bad) { audio.error(); return; } audio.click(); this.mmMode = id; Progress.d.settings.mmMode = id; Progress.save(); this.openMatchmaking(); }; box.appendChild(c);
     }
     const rk = $('#mm-ranked'), on = !!Progress.d.settings.mmRanked; rk.classList.toggle('on', on); rk.setAttribute('aria-checked', on); $('#mm-ranked-state').textContent = on ? 'AN' : 'AUS';
-    $('#mm-ranked-desc').textContent = on ? 'Rangpunkte (+/−) und volle Saisonpunkte. Zählt nur, wenn mindestens 2 echte Spieler im Match sind.' : 'Lockeres Spiel: XP und Münzen, aber keine Rangpunkte.';
+    $('#mm-ranked-desc').textContent = on ? 'Nur gegen echte Spieler, ohne Bots: Rangpunkte (+/−) und volle Saisonpunkte. Finden sich zu wenige Spieler, wird automatisch ein lockeres Match daraus.' : 'Lockeres Spiel: XP und Münzen, aber keine Rangpunkte.';
     rk.onclick = () => { audio.click(); Progress.d.settings.mmRanked = !on; Progress.save(); this.openMatchmaking(); };
     const leader = !p || p.isLeader; $('#mm-hint').textContent = p ? (leader ? 'Deine Party (' + size + ' Spieler) sucht gemeinsam.' : 'Nur der Party-Leiter kann die Suche starten.') : '';
     const st = $('#mm-start'); st.disabled = !leader || !!this._mm || !Social.connected; st.textContent = this._mm ? 'Suche läuft …' : (Social.connected ? 'Suche starten' : 'Verbinde …');
@@ -271,16 +335,17 @@ export class UI {
   }
   mmStatus(m) {
     this._mm = m; const bar = $('#mm-bar'); bar.classList.remove('found'); bar.classList.add('show'); const md = MODES[m.mode]?.name || m.mode, p = this._party;
-    $('#mmb-title').textContent = m.stage === 'filling' ? 'Keine weiteren Spieler – Bots füllen auf' : (m.ranked ? 'Ranked · ' : 'Suche · ') + md;
+    $('#mmb-title').textContent = m.stage === 'filling' ? (m.ranked && m.found < (m.rankedMin || 2) ? 'Zu wenige Spieler für Ranked – lockeres Match startet' : 'Keine weiteren Spieler – Bots füllen auf') : (m.ranked ? 'Ranked · ' : 'Suche · ') + md;
     $('#mmb-sub').textContent = m.stage === 'filling' ? md + ' startet gleich' : m.found + ' von ' + m.cap + ' Spielern gefunden' + (p ? ' · Party' : '');
     const s = m.waited | 0; $('#mmb-time').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     $('#mmb-cancel').style.display = !p || p.isLeader ? '' : 'none'; $('#mmb-cancel').onclick = async () => { audio.back(); const r = await Social.cmd({ k: 'mm_cancel' }); if (!r.ok) this.toast(r.error, 'bad'); };
-    $('#mm-sub').textContent = 'Suche läuft … ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    this.renderHome();
   }
-  mmHide() { this._mm = null; $('#mm-bar').classList.remove('show', 'found'); $('#mm-sub').textContent = 'Gegen Spieler online'; if (this.cur === 'mm') this.openMatchmaking(); }
+  mmHide() { this._mm = null; $('#mm-bar').classList.remove('show', 'found'); this.renderHome(); if (this.cur === 'mm') this.openMatchmaking(); }
   mmFound(m) {
     this._mm = null; const bar = $('#mm-bar'); bar.classList.add('show', 'found'); $('#mmb-title').textContent = 'Match gefunden!'; $('#mmb-sub').textContent = (m.ranked ? 'RANKED · ' : '') + (MODES[m.mode]?.name || m.mode) + ' · ' + m.humans + (m.humans === 1 ? ' Spieler' : ' Spieler') + (m.filled ? ' + Bots' : '');
-    $('#mmb-time').textContent = ''; $('#mmb-cancel').style.display = 'none'; $('#mm-sub').textContent = 'Gegen Spieler online'; audio.levelUp(); setTimeout(() => bar.classList.remove('show', 'found'), 3500);
+    $('#mmb-time').textContent = ''; $('#mmb-cancel').style.display = 'none'; audio.levelUp(); this.renderHome(); setTimeout(() => bar.classList.remove('show', 'found'), 3500);
+    if (m.downgraded) this.toast('Ranked nicht möglich (zu wenige echte Spieler) – lockeres Match, keine Rangpunkte.', 'event');
     if (this.inMatchNow()) { this.toast('Match gefunden – nach dem laufenden Match bitte beitreten (Code ' + m.code + ')', 'event'); return; }
     this.joinRoom(m.code);
   }
@@ -294,7 +359,7 @@ export class UI {
     return r.ok;
   }
   onParty(p) {
-    const wasIn = !!this._party; this._party = p; this.renderParty(); this.g.syncPartyChars(p);
+    const wasIn = !!this._party; this._party = p; this.renderParty(); this.renderHome(); this.g.syncPartyChars(p);
     if (!wasIn && p && p.members.length > 1) audio.notify();
     if (this.cur === 'lobby') this.refreshLobbyFriends(); if (this.cur === 'friends') this.refreshFriends();
   }
@@ -405,7 +470,7 @@ export class UI {
     const inn = $('#fr-in'); inn.replaceChildren(); if (!d.incoming.length) inn.innerHTML = '<div class="empty">Keine offenen Anfragen.</div>';
     for (const r of d.incoming) inn.appendChild(row(r.username, '<b class="fn"></b><small>Lv ' + r.level + '</small>', [['Annehmen', act('accept', r.username, r.username + ' ist jetzt dein Freund!')], ['Ablehnen', act('decline', r.username)]]));
     const out = $('#fr-out'); out.replaceChildren(); for (const r of d.outgoing) out.appendChild(row(r.username, '<b class="fn"></b><small>wartet …</small>', [['Zurückziehen', act('remove', r.username)]]));
-    $('#fr-count').textContent = d.incoming.length ? d.incoming.length + ' neue Anfrage(n)!' : 'Suchen & einladen';
+    $('#fr-count').textContent = d.incoming.length ? '● ' + d.incoming.length : (d.friends.filter(f => f.online).length ? d.friends.filter(f => f.online).length + ' online' : '');
   }
   async searchPlayers(more) {
     const q = $('#fr-q').value.trim(); if (q.length < 2) return this.toast('Mindestens 2 Zeichen eingeben.', 'bad');
@@ -421,7 +486,7 @@ export class UI {
       }
     } catch (e) { this.toast(e.message, 'bad'); }
   }
-  async checkFriendRequests() { if (!Account.user) return; try { const d = await Account.friends(); if (d.incoming.length) { this.toast(d.incoming.length + ' neue Freundschaftsanfrage(n)!', 'event'); $('#fr-count').textContent = d.incoming.length + ' neue Anfrage(n)!'; } } catch { /* ignorieren */ } }
+  async checkFriendRequests() { if (!Account.user) return; try { const d = await Account.friends(); if (d.incoming.length) { this.toast(d.incoming.length + ' neue Freundschaftsanfrage(n)!', 'event'); $('#fr-count').textContent = '● ' + d.incoming.length; } } catch { /* ignorieren */ } }
   initAccount() {
     $('#fr-search').onclick = () => this.searchPlayers(false); $('#fr-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.searchPlayers(false); }); $('#fr-more').onclick = () => this.searchPlayers(true);
     $('#fr-login').onclick = () => { audio.click(); this.go('login'); }; $('#mm-login').onclick = () => { audio.click(); this.go('login'); };

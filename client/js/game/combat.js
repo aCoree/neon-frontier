@@ -32,6 +32,7 @@ export class Combat {
     for (const w of this.weapons) if (!old.has(w) || this.mags[w] === undefined) this.mags[w] = WEAPONS[w].mag;
     const i = this.weapons.indexOf(cur); this.cur = i >= 0 ? i : 0;
     if (i < 0) this.swapTo(Math.min(this.cur, this.weapons.length - 1), true);
+    if (m.eq && this.weapons.includes(m.eq) && m.eq !== this.id) this.swapTo(this.weapons.indexOf(m.eq), true);   // Server hat eine Waffe ausgerüstet (Tauschen/Droppen)
     this.cons = { ...this.cons, ...m.c };
     if (this.training) for (const k of Object.keys(this.cons)) this.cons[k] = Math.max(this.cons[k], 3);
   }

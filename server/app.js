@@ -74,13 +74,13 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     valid: (t) => t.members.every(m => (social.get(m.userId)?.size || 0) > 0) && (!t.party || (() => { const p = parties.parties.get(t.party); return !!p && p.members.length === t.members.length && t.members.every(m => p.members.includes(m.userId)); })()),
     onStatus: (t, st) => { for (const m of t.members) notify(m.userId, { k: 'mm_status', ...st }); },
     onCancel: (t, reason) => { for (const m of t.members) notify(m.userId, { k: 'mm_cancelled', reason }); },
-    onMatch: ({ mode, ranked, tickets, humans, bots, filled }) => {
+    onMatch: ({ mode, ranked, downgraded, tickets, humans, bots, filled }) => {
       const code = newCode(), cfg = MM_MODES[mode], hooks = hooksFor();
       const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false }, hooks, ranked: !!ranked && !!api.flags.ranked }); hooks.room = room;
       room.mm = { expect: new Set(tickets.flatMap(t => t.members.map(m => m.userId))), created: Date.now(), deadline: Date.now() + 25000 };
       rooms.set(code, room); stats.inc('mm_match', mode); if (filled) stats.inc('mm_filled', mode);
       log.log(`[mm] ${mode}: ${humans} Spieler${filled ? ' + Bots' : ''} → Raum ${code}`);
-      for (const t of tickets) for (const m of t.members) notify(m.userId, { k: 'mm_found', code, mode, ranked: !!room.settings.ranked, humans, bots: cfg.bots ? bots : Math.max(0, cfg.cap - humans), filled });
+      for (const t of tickets) for (const m of t.members) notify(m.userId, { k: 'mm_found', code, mode, ranked: !!room.settings.ranked, downgraded: !!downgraded, humans, bots: cfg.bots ? bots : Math.max(0, cfg.cap - humans), filled });
     },
   });
   // Matchmaking-Räume starten automatisch, sobald alle da sind – oder nach der Frist mit den Anwesenden

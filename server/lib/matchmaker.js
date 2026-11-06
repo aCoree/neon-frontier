@@ -36,7 +36,7 @@ export class Matchmaker {
   cancel(ticketId, reason) { const t = this.tickets.get(ticketId); if (!t) return false; this.drop(t); if (reason !== null) this.onCancel(t, reason); return true; }
   cancelUser(userId, reason) { const t = this.ticketOf(userId); return t ? this.cancel(t.id, reason) : false; }
   drop(t) { this.tickets.delete(t.id); for (const m of t.members) if (this.byUser.get(m.userId) === t) this.byUser.delete(m.userId); }
-  status(t, group) { const cfg = MM_MODES[t.mode], found = group.reduce((n, x) => n + x.members.length, 0), w = this.now() - t.since; return { mode: t.mode, ranked: t.ranked, waited: Math.round(w / 1000), found, cap: cfg.cap, stage: w >= this.max - 5000 ? 'filling' : 'searching' }; }
+  status(t, group) { const cfg = MM_MODES[t.mode], found = group.reduce((n, x) => n + x.members.length, 0), w = this.now() - t.since; return { mode: t.mode, ranked: t.ranked, rankedMin: cfg.minStart, waited: Math.round(w / 1000), found, cap: cfg.cap, stage: w >= this.max - 5000 ? 'filling' : 'searching' }; }
   window(waitMs) { return WINDOW0 + WINDOW_PER_SEC * (waitMs / 1000); }
   // Gruppe um das älteste Ticket des Modus bilden (Rang-Fenster beidseitig, Platz begrenzt)
   group(anchor) {
@@ -59,8 +59,11 @@ export class Matchmaker {
         const full = humans >= cfg.cap, ready = humans >= cfg.minStart && wait >= this.soft, late = wait >= this.max;
         if (!(full || ready || late)) break;
         for (const t of g) this.drop(t);
-        const bots = cfg.bots ? Math.max(0, cfg.bots - humans) : 0; this.stats.matches++; if (humans < cfg.cap) this.stats.filled++;
-        this.onMatch({ mode, ranked, tickets: g, humans, bots, filled: humans < cfg.cap });
+        // Ranked gibt es nur gegen echte Spieler: reicht es nicht, wird das Match automatisch locker (mit Bots)
+        const rk = ranked && (full || ready), downgraded = ranked && !rk;
+        const bots = rk ? 0 : (cfg.bots ? Math.max(0, cfg.bots - humans) : 0), filled = !full && (bots > 0 || (!!cfg.team && humans < cfg.cap));
+        this.stats.matches++; if (filled) this.stats.filled++;
+        this.onMatch({ mode, ranked: rk, downgraded, tickets: g, humans, bots, filled });
       }
     }
     // Status an alle noch wartenden Tickets

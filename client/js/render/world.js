@@ -1,6 +1,7 @@
 // Baut die komplette 3D-Welt (Gelände, Gebäude, Vegetation, Wasser, Lichter, Animationen) aus den Kartendaten.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { fixCoplanar } from './zfix.js';
 import { Batch, addBox, addCyl, addSphere, addRibbon, treeGeos, smallGeos } from './geo.js';
 import { terrainTextures, glowSpriteTexture, labelTexture, updateNight } from './textures.js';
 import { fbm, noise2, smoothstep, lerp, clamp, mulberry32 } from '../shared/util.js';
@@ -86,6 +87,7 @@ export class WorldView {
 
   // ---------------- Bauteile ----------------
   buildParts() {
+    fixCoplanar(this.map.parts);   // gleiche Ebene = Flackern (Z-Fighting) → minimal staffeln
     const M = this.M, batches = new Map();
     const getB = (m, p) => {
       const nc = p.nocast || p.m === 'roadLine' ? 1 : 0;

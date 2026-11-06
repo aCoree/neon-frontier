@@ -10,6 +10,8 @@ const R_BODY = 0.42, H_STAND = 1.8, H_CROUCH = 1.25;
 const r2 = (v) => Math.round(v * 100) / 100;
 const clean = (s, n = 16) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
 let idc = 1;
+export const FALL_SAFE = 5.5, FALL_DMG_PER_M = 7, FALL_LAUNCH_VY = 10.5;   // Meter ohne Schaden · Schaden pro weiterem Meter (≈ 24 m = tödlich) · Start-Tempo ab dem es ein Katapult ist
+export const MAX_WEAPONS = 5;   // Plätze: Viper + Klinge + 3 gefundene Waffen
 const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr', 'drop', 'lowgrav', 'supply', 'supplyland', 'toast', 'join', 'leave', 'spawn', 'drone']);
 
 export class Room {
@@ -107,6 +109,7 @@ export class Room {
       case 'st': return this.onState(m, e, msg);
       case 'fire': return this.onFire(m, e, msg);
       case 'swap': if (WEAPONS[msg.w] && e.owned.includes(msg.w)) e.w = msg.w; return;
+      case 'dropw': return this.dropWeapon(e);
       case 'reload': e.reloadUntil = this.T + 1; return;
       case 'throw': return this.onThrow(m, e, msg);
       case 'use': return this.onUse(m, e, msg);
@@ -271,15 +274,15 @@ export class Room {
     if (this.settings.training) { e.cons = { medkit: 4, shieldpot: 4, grenade: 5, smoke: 4 }; }
     e.hist.length = 0; e.streak = 0; e.lastDmgFrom = null; e.assists = {};
     if (e.isBot) this.bots.onSpawn(e);
-    this.emit({ k: 'spawn', id: e.id, x: r2(e.x), y: r2(e.y), z: r2(e.z), yaw: r2(e.yaw), first: first ? 1 : 0 });
+    e.fall = null; this.emit({ k: 'spawn', id: e.id, x: r2(e.x), y: r2(e.y), z: r2(e.z), yaw: r2(e.yaw), first: first ? 1 : 0 });
     if (e.member) this.sendInv(e);
   }
   killSilently(e) { e.alive = false; }
 
-  sendInv(e) {
+  sendInv(e, eq) {
     if (!e.member) return;
     const now = this.T, pw = {}; for (const [k, v] of Object.entries(e.power)) if (v > now) pw[k] = r2(v - now);
-    this.send(e.member, { k: 'inv', w: e.owned, c: e.cons, g: e.gadget, pw, bar: e.barrierUntil > now ? Math.round(e.barrier) : 0, T: this.T });
+    this.send(e.member, { k: 'inv', w: e.owned, c: e.cons, g: e.gadget, pw, bar: e.barrierUntil > now ? Math.round(e.barrier) : 0, T: this.T, eq });
   }
 
   // =============== Eingaben ===============
@@ -297,7 +300,25 @@ export class Room {
     let fl = (s.fl | 0) & (FL.CROUCH | FL.SPRINT | FL.AIR | FL.DASH | FL.RELOAD | FL.AIM | FL.SHOOT | FL.GRAPPLE | FL.JET | FL.MELEE | FL.THROW);
     e.crouch = !!(fl & FL.CROUCH); e.clientFl = fl;
     if (WEAPONS[s.w] && e.owned.includes(s.w)) e.w = s.w;
+    this.trackFall(e, fl, d, s.tp);
     if (e.y < -40) this.damage(e, 9999, e, { w: 'fall' });
+  }
+  // Fallschaden – serverseitig aus der Bewegung abgeleitet (Luftphase, höchster Punkt, Landehöhe); der Client kann ihn nicht abschalten.
+  // Kein Schaden bei: Jetpack, Enterhaken, Niedrig-Schwerkraft, Sprungplatten/Starts (Aufwärtstempo > Sprung), Teleport, Wasser, Training.
+  trackFall(e, fl, d, tp) {
+    const f = e.fall || (e.fall = { air: false, peak: 0, safe: false });
+    if (tp || d > 8 || this.state !== 'playing') { f.air = false; return; }
+    const gy = this.world.groundAt(e.x, e.z, e.y + 0.6), air = e.y - gy > 0.5;
+    if (air) {
+      if (!f.air) { f.air = true; f.peak = e.y; f.safe = false; }
+      if (e.y > f.peak) f.peak = e.y;
+      if ((fl & (FL.GRAPPLE | FL.JET)) || this.T < this.lowgravUntil || e.vy > FALL_LAUNCH_VY) f.safe = true;
+      return;
+    }
+    if (!f.air) return; f.air = false;
+    const drop = f.peak - e.y; if (f.safe || drop <= FALL_SAFE || this.settings.training) return;
+    const sea = this.map.seaLevel ?? 0; if (this.world.terrain(e.x, e.z) < sea + 0.1 && e.y < sea + 1.5) return;   // Landung im Wasser
+    this.damage(e, Math.min(100, (drop - FALL_SAFE) * FALL_DMG_PER_M), e, { w: 'fall' });
   }
 
   entHeight(e) { return e.crouch ? H_CROUCH : H_STAND; }
@@ -539,8 +560,9 @@ export class Room {
     this.emit({ k: 'end', winTeam: winnerTeam, winId: winnerId, board });
     this.flush(true);
     if (this.hooks?.matchEnd && !this.settings.training) {
+      const botsPresent = [...this.ents.values()].some(e => e.isBot);   // Ranked zählt nur in reinen Spieler-Matches
       const humans = [...this.ents.values()].filter(e => !e.isBot).length, secs = this.T - (this.matchStart || 0);
-      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: !!this.settings.ranked }));
+      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: !!this.settings.ranked && !botsPresent }));
       try { this.hooks.matchEnd(this, this.matchId, results); } catch (err) { console.error('[room] matchEnd-Hook', err); }
     }
   }
@@ -557,7 +579,8 @@ export class Room {
       case 'weapon': {
         const def = WEAPONS[p.item]; if (!def) return false;
         if (e.owned.includes(p.item)) { if (!m || !def.ammo) return false; this.send(m, { k: 'give', kind: 'ammo', item: def.ammo, n: Math.round((AMMO_GIVE[def.ammo] || 30) * 0.6) }); return true; }
-        if (e.owned.length >= 5) {
+        if (e.owned.length >= MAX_WEAPONS && !e.isBot) return false;   // Inventar voll: nur bewusst tauschen (E) oder vorher droppen (V)
+        if (e.owned.length >= MAX_WEAPONS) {
           const idx = e.owned.indexOf(e.w) > 1 ? e.owned.indexOf(e.w) : e.owned.length - 1;
           const old = e.owned[idx]; if (old === 'blade' || old === 'viper') return false;
           e.owned[idx] = p.item; if (e.isBot === false) this.addDyn('weapon', old, e.x, e.y + 0.3, e.z, 40);
@@ -573,7 +596,7 @@ export class Room {
         if (p.item === 'barrier') { e.barrier = pw.absorb; e.barrierUntil = this.T + pw.dur; } else e.power[p.item] = this.T + pw.dur;
         this.sendInv(e); this.emit({ k: 'powerfx', id: e.id, t: p.item }); return true;
       }
-      case 'gadget': if (!GADGETS[p.item] || e.gadget === p.item) return false; e.gadget = p.item; this.sendInv(e); return true;
+      case 'gadget': if (!GADGETS[p.item] || e.gadget === p.item) return false; if (e.gadget && !e.isBot) return false; e.gadget = p.item; this.sendInv(e); return true;
       case 'shard': if (!m || e.shardSet.has(p.id)) return false; e.shardSet.add(p.id); this.send(m, { k: 'shard', id: p.id, n: e.shardSet.size }); return 'private';
     }
     return false;
@@ -597,15 +620,44 @@ export class Room {
       for (let i = this.dyn.length - 1; i >= 0; i--) {
         const d = this.dyn[i];
         if (Math.abs(d.x - e.x) > 1.7 || Math.abs(d.z - e.z) > 1.7 || Math.abs(d.y - e.y) > 2.6) continue;
+        if (d.lock && d.lock.id === e.id && T < d.lock.until) continue;
         if (this.tryPickup(e, d)) { this.emit({ k: 'pick', id: d.id, by: e.id }); this.dyn.splice(i, 1); }
       }
     }
+  }
+
+  // =============== Waffen droppen / tauschen ===============
+  dropLocked(kind, item, e, ttl = 60) { const d = this.addDyn(kind, item, e.x, e.y + 0.3, e.z, ttl); d.lock = { id: e.id, until: this.T + 3 }; return d; }
+  dropWeapon(e) {
+    if (!e.alive) return;
+    const w = e.w; if (!w || w === 'viper' || w === 'blade' || !e.owned.includes(w)) return;
+    e.owned = e.owned.filter(x => x !== w); e.w = 'viper'; this.dropLocked('weapon', w, e); this.sendInv(e, 'viper');
+  }
+  // E bei vollem Inventar: Waffe (oder Gadget) vom Boden gegen die aktuelle tauschen; die alte landet am Boden und wird nicht sofort wieder aufgehoben
+  swapPickup(e, id) {
+    const st = this.pickups.find(p => p.id === id && p.on), dy = this.dyn.find(d => d.id === id), p = st || dy; if (!p || (p.kind !== 'weapon' && p.kind !== 'gadget')) return;
+    if (Math.abs(p.x - e.x) > 2.0 || Math.abs(p.z - e.z) > 2.0 || Math.abs(p.y - e.y) > 2.8) return;
+    if (p.kind === 'weapon') {
+      const def = WEAPONS[p.item]; if (!def || e.owned.includes(p.item)) return;
+      if (e.owned.length < MAX_WEAPONS) { if (!this.tryPickup(e, p)) return; }
+      else {
+        const drops = e.owned.map((w, i) => [w, i]).filter(([w]) => w !== 'viper' && w !== 'blade'); if (!drops.length) return;
+        const cur = drops.find(([w]) => w === e.w) || drops[drops.length - 1], [old, idx] = cur;
+        e.owned[idx] = p.item; e.w = p.item; this.dropLocked('weapon', old, e, 60);
+        if (e.member) this.send(e.member, { k: 'give', kind: 'weapon', item: p.item, n: AMMO_GIVE[def.ammo] ?? 0 }); this.sendInv(e, p.item);
+      }
+    } else {
+      if (!GADGETS[p.item] || e.gadget === p.item) return; const old = e.gadget; e.gadget = p.item; if (old) this.dropLocked('gadget', old, e, 60); this.sendInv(e);
+    }
+    if (st) { st.on = false; st.next = this.T + (st.respawn || 30); } else this.dyn.splice(this.dyn.indexOf(dy), 1);
+    this.emit({ k: 'pick', id: p.id, by: e.id });
   }
 
   // =============== Interaktionen ===============
   setDoor(d, open) { d.open = open; if (d.col) d.col.on = !open; }
   onInteract(m, e, msg) {
     if (!e.alive) return;
+    if (msg.t === 'swap') return this.swapPickup(e, String(msg.id));
     if (msg.t === 'chest') {
       const c = this.map.chests.find(c => c.id === msg.id), st = this.chestState.get(msg.id); if (!c || !st || st.open) return;
       if (Math.hypot(c.x - e.x, c.z - e.z) > 4 || Math.abs(c.y - e.y) > 3) return;
