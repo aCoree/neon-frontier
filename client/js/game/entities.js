@@ -19,7 +19,7 @@ function plateTexture(text, color, sub) {
 export class RemoteEnt {
   constructor(info, scene, mode) {
     this.id = info.id; this.info = info; this.scene = scene; this.buf = [];
-    this.char = new Character(info.skin, info.wskin);
+    this.char = new Character(info.skin, info.wskin, info.back);
     this.root = this.char.root; scene.add(this.root);
     this.team = info.team; this.alive = true; this.hp = 100; this.shield = 0; this.fl = 0; this.w = 'viper';
     this.vx = 0; this.vz = 0; this.vy = 0; this.speed = 0; this.px = null; this.pz = null; this.py = null; this.lastW = null; this.reloadWas = false;

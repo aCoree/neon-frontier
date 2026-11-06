@@ -3,7 +3,7 @@ import { xpForLevel, SKINS, WSKINS, ACHIEVEMENTS } from '../shared/defs.js';
 
 const KEY = 'neon_frontier_v1';
 const DEFAULT = {
-  name: '', xp: 0, level: 1, skin: 'vanguard', wskin: 'default', ach: {}, stats: { kills: 0, headshots: 0, botKills: 0, shards: 0, chests: 0, wins: 0, matches: 0, deaths: 0 }, seenSkins: {},
+  name: '', xp: 0, level: 1, skin: 'vanguard', wskin: 'default', back: 'none', ach: {}, stats: { kills: 0, headshots: 0, botKills: 0, shards: 0, chests: 0, wins: 0, matches: 0, deaths: 0 }, seenSkins: {},
   settings: { quality: 'high', sens: 1.0, fov: 74, master: 0.8, music: 0.5, sfx: 0.9, ambient: 0.6, invertY: false, server: '', shake: 1, dmgNumbers: true, hints: true, fpsCap: 60, dynRes: true, batterySaver: false, shadows: 'auto', particles: 1, viewDist: 380, renderScale: 1 },
 };
 

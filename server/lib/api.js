@@ -1,10 +1,10 @@
 // HTTP-API: Konten, Profile, Meldungen, Stummschalten, Admin-Funktionen. Alle Rechte werden serverseitig aus der Datenbank geprüft.
 import crypto from 'node:crypto';
-import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK } from './auth.js';
-import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
+import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK, filterText } from './auth.js';
+import { rankOf, rankInfo, levelFromXp, RANKS, grantUnlocks } from './progression.js';
 import { exportBackup } from './backup.js';
 import { BUILD } from '../../client/js/version.js';
-import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf } from '../../client/js/shared/defs.js';
+import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf, NAME_COLORS, AVATAR_BGS, AVATAR_ICONS, RENAME_COST, RENAME_COOLDOWN_DAYS, BIO_MAX } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
 export const DEFAULT_FLAGS = { accounts: true, ranked: true, chat: true, emotes: true, dailyRewards: true, shop: true, friends: true, seasons: true, analytics: true, matchmaking: true, maintenance: false };
@@ -56,9 +56,18 @@ export class Api {
   async authReq(req) { const h = String(req.headers.authorization || ''); return this.userFromToken(h.startsWith('Bearer ') ? h.slice(7) : null); }
   async publicUser(u, self = true) {
     const s = await this.db.one('SELECT * FROM user_stats WHERE user_id=$1', [u.id]); const lv = levelFromXp(Number(s.xp));
-    const rank = rankOf(s.rank_points), next = RANKS.find(r => r.min > s.rank_points);
-    return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, rankMin: RANKS.filter(r => r.min <= s.rank_points).pop().min, bestRank: rankOf(s.best_rank_points), nextRank: next ? next.name : null, nextRankAt: next ? next.min : null, ...(self ? { currency: Number(s.currency) } : {}) },
-      equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin }, ranks: RANKS };
+    const ri = rankInfo(s.rank_points), bi = rankInfo(s.best_rank_points);
+    const out = { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills,
+        rankPoints: s.rank_points, rank: ri.tier, rankLabel: ri.label, rankDiv: ri.div, rankIdx: ri.idx, rankMin: ri.from, nextRank: ri.nextLabel, nextRankAt: ri.nextAt, bestRank: bi.tier, bestRankLabel: bi.label, bestRankPoints: s.best_rank_points,
+        rankedMatches: s.ranked_matches, placement: Math.max(0, 5 - s.ranked_matches), ...(self ? { currency: Number(s.currency) } : {}) },
+      equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin, back: s.equipped_back }, profile: { bio: s.bio, nameColor: s.name_color, avatarBg: s.avatar_bg, avatarIcon: s.avatar_icon }, ranks: RANKS };
+    if (self) out.rename = this.renameInfo(u);
+    return out;
+  }
+  // Namensänderung: die erste ist gratis, jede weitere kostet Münzen; dazwischen liegt eine Wartezeit.
+  renameInfo(u) {
+    const last = u.username_changed_at ? new Date(u.username_changed_at).getTime() : 0, next = last ? last + RENAME_COOLDOWN_DAYS * 86400000 : 0;
+    return { free: !last, cost: last ? RENAME_COST : 0, nextAt: next > Date.now() ? next : null };
   }
   // Gibt den Freund zurück (nur bei akzeptierter Freundschaft), sonst null – Grundlage für Einladungen
   async friendByName(userId, name) {
@@ -85,14 +94,14 @@ export class Api {
       const page = rows.slice(0, 10), ids = page.map(r => r.id);
       const rel = ids.length ? await this.db.all('SELECT requester, addressee, status FROM friendships WHERE (requester=$1 AND addressee = ANY($2::bigint[])) OR (addressee=$1 AND requester = ANY($2::bigint[]))', [uid, ids]) : [];
       const relOf = (id) => { const r = rel.find(x => String(x.requester) === String(id) || String(x.addressee) === String(id)); if (!r) return 'none'; if (r.status === 'accepted') return 'friend'; return String(r.requester) === String(uid) ? 'outgoing' : 'incoming'; };
-      return this.send(res, 200, { players: page.map(r => ({ username: r.username, level: r.level, rank: rankOf(r.rank_points), relation: relOf(r.id) })), next: rows.length > 10 ? page[9].username_lower : null });
+      return this.send(res, 200, { players: page.map(r => ({ username: r.username, level: r.level, rank: rankOf(r.rank_points), rankLabel: rankInfo(r.rank_points).label, relation: relOf(r.id) })), next: rows.length > 10 ? page[9].username_lower : null });
     }
     if (req.method === 'GET' && path === '/api/friends') {
       const rows = await this.db.all(`SELECT u.id, u.username, s.level, s.rank_points, f.status, f.requester FROM friendships f
         JOIN users u ON u.id = CASE WHEN f.requester=$1 THEN f.addressee ELSE f.requester END JOIN user_stats s ON s.user_id=u.id WHERE f.requester=$1 OR f.addressee=$1 ORDER BY u.username_lower LIMIT 300`, [uid]);
       const out = { friends: [], incoming: [], outgoing: [] };
       for (const r of rows) {
-        if (r.status === 'accepted') { const p = this.presence(Number(r.id)); out.friends.push({ username: r.username, level: r.level, rank: rankOf(r.rank_points), online: !!p.online, room: p.room || null, inMatch: !!p.inMatch }); }
+        if (r.status === 'accepted') { const p = this.presence(Number(r.id)); out.friends.push({ username: r.username, level: r.level, rank: rankOf(r.rank_points), rankLabel: rankInfo(r.rank_points).label, online: !!p.online, room: p.room || null, inMatch: !!p.inMatch }); }
         else if (String(r.requester) === String(uid)) out.outgoing.push({ username: r.username }); else out.incoming.push({ username: r.username, level: r.level });
       }
       out.friends.sort((a, b) => (b.online - a.online) || a.username.localeCompare(b.username));
@@ -131,10 +140,10 @@ export class Api {
   async inventory(user) {
     await grantUnlocks(this.db, user.id, (await this.db.one('SELECT level FROM user_stats WHERE user_id=$1', [user.id])).level);
     const owned = (await this.db.all('SELECT item_id FROM inventory WHERE user_id=$1', [user.id])).map(r => r.item_id);
-    const s = await this.db.one('SELECT currency, level, equipped_skin, equipped_wskin FROM user_stats WHERE user_id=$1', [user.id]);
+    const s = await this.db.one('SELECT currency, level, equipped_skin, equipped_wskin, equipped_back FROM user_stats WHERE user_id=$1', [user.id]);
     const d = await this.db.one("SELECT streak, (last_claim = CURRENT_DATE) AS today, (last_claim = CURRENT_DATE - 1) AS yesterday FROM daily_rewards WHERE user_id=$1", [user.id]);
     const streak = d ? (d.today || d.yesterday ? d.streak : 0) : 0;
-    return { owned, coins: Number(s.currency), level: s.level, equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin }, catalog: CATALOG.map(i => ({ id: i.id, type: i.type, name: i.name, level: i.level, price: i.price })),
+    return { owned, coins: Number(s.currency), level: s.level, equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin, back: s.equipped_back }, catalog: CATALOG.map(i => ({ id: i.id, type: i.type, name: i.name, level: i.level, price: i.price })),
       daily: { enabled: !!this.flags.dailyRewards, canClaim: !!this.flags.dailyRewards && !(d && d.today), streak, nextDay: (streak % 7) + 1, rewards: DAILY_REWARDS } };
   }
   async buy(req, res, user) {
@@ -155,12 +164,12 @@ export class Api {
   }
   async equip(req, res, user) {
     if (this.rl.hit('equip:' + user.id, 30, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
-    const b = await this.body(req); const skin = b.skin ? String(b.skin) : null, wskin = b.wskin ? String(b.wskin) : null;
-    for (const [id, type] of [[skin && 'skin:' + skin, 'skin'], [wskin && 'wskin:' + wskin, 'wskin']]) {
+    const b = await this.body(req); const skin = b.skin ? String(b.skin) : null, wskin = b.wskin ? String(b.wskin) : null, back = b.back ? String(b.back) : null;
+    for (const [id, type] of [[skin && 'skin:' + skin, 'skin'], [wskin && 'wskin:' + wskin, 'wskin'], [back && 'back:' + back, 'back']]) {
       if (!id) continue; if (!CATALOG_BY_ID[id]) return this.send(res, 400, { error: 'Unbekanntes Item.' });
       if (!(await this.db.one('SELECT 1 FROM inventory WHERE user_id=$1 AND item_id=$2', [user.id, id]))) return this.send(res, 403, { error: 'Du besitzt dieses Item nicht.' });
     }
-    await this.db.query('UPDATE user_stats SET equipped_skin = COALESCE($2, equipped_skin), equipped_wskin = COALESCE($3, equipped_wskin) WHERE user_id=$1', [user.id, skin, wskin]);
+    await this.db.query('UPDATE user_stats SET equipped_skin = COALESCE($2, equipped_skin), equipped_wskin = COALESCE($3, equipped_wskin), equipped_back = COALESCE($4, equipped_back) WHERE user_id=$1', [user.id, skin, wskin, back]);
     this.send(res, 200, await this.inventory(user));
   }
   async claimDaily(res, user) {
@@ -199,17 +208,63 @@ export class Api {
   }
   // Ranglisten (Top 50): 'season' = Saisonpunkte dieses Monats, 'rank' = Rangpunkte (nur Ranked-Matches). Gesperrte Spieler tauchen nicht auf.
   async leaderboard(user, kind) {
-    const ok = "NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now())";
+    const ok = "NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now())", cols = 'st.level, st.rank_points, st.wins, st.matches, st.name_color, st.avatar_bg, st.avatar_icon, st.equipped_skin';
+    const row = (r, i, points) => { const ri = rankInfo(r.rank_points); return { pos: i + 1, name: r.username, level: r.level, points, rank: ri.tier, rankLabel: ri.label, rankDiv: ri.div, wins: r.wins, matches: r.matches, nc: r.name_color, av: { bg: r.avatar_bg, icon: r.avatar_icon, skin: r.equipped_skin } }; };
     if (kind === 'rank') {
       const mine = (await this.db.one('SELECT rank_points FROM user_stats WHERE user_id=$1', [user.id]))?.rank_points ?? 0;
-      const rows = await this.db.all(`SELECT u.username, st.level, st.rank_points, st.wins, st.matches FROM user_stats st JOIN users u ON u.id=st.user_id WHERE st.rank_points > 0 AND ${ok} ORDER BY st.rank_points DESC, st.wins DESC, u.username_lower ASC LIMIT 50`);
-      const pos = mine > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM user_stats WHERE rank_points > $1', [mine])).n) + 1 : null;
-      return { kind: 'rank', title: 'Rangliste', unit: 'RP', me: { points: mine, position: pos, rank: rankOf(mine) }, rows: rows.map((r, i) => ({ pos: i + 1, name: r.username, level: r.level, points: r.rank_points, rank: rankOf(r.rank_points), wins: r.wins, matches: r.matches })) };
+      const rows = await this.db.all(`SELECT u.username, ${cols} FROM user_stats st JOIN users u ON u.id=st.user_id WHERE st.ranked_matches > 0 AND ${ok} ORDER BY st.rank_points DESC, st.wins DESC, u.username_lower ASC LIMIT 50`);
+      const played = (await this.db.one('SELECT ranked_matches FROM user_stats WHERE user_id=$1', [user.id]))?.ranked_matches ?? 0;
+      const pos = played > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM user_stats WHERE ranked_matches > 0 AND rank_points > $1', [mine])).n) + 1 : null;
+      const ri = rankInfo(mine);
+      return { kind: 'rank', title: 'Rangliste', unit: 'Wertung', me: { points: mine, position: pos, rank: ri.tier, rankLabel: ri.label, played }, rows: rows.map((r, i) => row(r, i, r.rank_points)) };
     }
     const s = seasonOf(), me = await this.db.one('SELECT points FROM season_stats WHERE season_id=$1 AND user_id=$2', [s.id, user.id]), pts = me ? me.points : 0;
-    const rows = await this.db.all(`SELECT u.username, ss.points, ss.wins, ss.matches, st.level, st.rank_points FROM season_stats ss JOIN users u ON u.id=ss.user_id JOIN user_stats st ON st.user_id=u.id WHERE ss.season_id=$1 AND ss.points>0 AND ${ok} ORDER BY ss.points DESC, ss.updated_at ASC LIMIT 50`, [s.id]);
+    const rows = await this.db.all(`SELECT u.username, ss.points, ${cols} FROM season_stats ss JOIN users u ON u.id=ss.user_id JOIN user_stats st ON st.user_id=u.id WHERE ss.season_id=$1 AND ss.points>0 AND ${ok} ORDER BY ss.points DESC, ss.updated_at ASC LIMIT 50`, [s.id]);
     const pos = pts > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM season_stats WHERE season_id=$1 AND points > $2', [s.id, pts])).n) + 1 : null;
-    return { kind: 'season', title: 'Saison-Rangliste', unit: 'Punkte', season: { id: s.id, name: s.name, endsAt: s.endsAt }, me: { points: pts, position: pos }, rows: rows.map((r, i) => ({ pos: i + 1, name: r.username, level: r.level, points: r.points, rank: rankOf(r.rank_points), wins: r.wins, matches: r.matches })) };
+    return { kind: 'season', title: 'Saison-Rangliste', unit: 'Punkte', season: { id: s.id, name: s.name, endsAt: s.endsAt }, me: { points: pts, position: pos }, rows: rows.map((r, i) => row(r, i, r.points)) };
+  }
+  // ---------- Profil anpassen ----------
+  async customize(req, res, user) {
+    if (this.rl.hit('cust:' + user.id, 30, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
+    const b = await this.body(req), st = await this.db.one('SELECT level FROM user_stats WHERE user_id=$1', [user.id]), set = [], vals = [user.id];
+    const add = (col, v) => { vals.push(v); set.push(col + '=$' + vals.length); };
+    if (b.nameColor !== undefined) { const c = NAME_COLORS.find(x => x.id === b.nameColor); if (!c) return this.send(res, 400, { error: 'Unbekannte Namensfarbe.' }); if (st.level < c.req) return this.send(res, 403, { error: `Diese Farbe gibt es ab Level ${c.req}.` }); add('name_color', c.id); }
+    if (b.avatarBg !== undefined) { if (!AVATAR_BGS.some(x => x.id === b.avatarBg)) return this.send(res, 400, { error: 'Unbekannter Hintergrund.' }); add('avatar_bg', b.avatarBg); }
+    if (b.avatarIcon !== undefined) { if (!AVATAR_ICONS.some(x => x.id === b.avatarIcon)) return this.send(res, 400, { error: 'Unbekanntes Symbol.' }); add('avatar_icon', b.avatarIcon); }
+    if (b.bio !== undefined) {
+      if (typeof b.bio !== 'string') return this.send(res, 400, { error: 'Ungültige Bio.' });
+      const bio = filterText(b.bio.replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, BIO_MAX)); add('bio', bio);
+    }
+    if (!set.length) return this.send(res, 400, { error: 'Nichts zu ändern.' });
+    await this.db.query(`UPDATE user_stats SET ${set.join(', ')} WHERE user_id=$1`, vals);
+    this.send(res, 200, { user: await this.publicUser(user) });
+  }
+  async rename(req, res, user) {
+    if (this.rl.hit('rename:' + user.id, 12, 3600000)) return this.send(res, 429, { error: 'Zu viele Versuche. Bitte später erneut.' });
+    if (user.role === 'OWNER') return this.send(res, 403, { error: 'Der Name des Besitzers ist fest.' });
+    const b = await this.body(req), name = clip(b.username, 16), lower = name.toLowerCase();
+    const err = validateUsername(name) || (this.cfg.ownerUsername && lower === this.cfg.ownerUsername.toLowerCase() ? 'Dieser Name ist reserviert.' : null);
+    if (err) return this.send(res, 400, { error: err });
+    if (name === user.username) return this.send(res, 400, { error: 'Das ist schon dein Name.' });
+    const caseOnly = lower === user.username_lower;   // nur Groß-/Kleinschreibung ändern: gratis, ohne Wartezeit
+    const info = this.renameInfo(user);
+    if (!caseOnly && info.nextAt) return this.send(res, 429, { error: `Du kannst deinen Namen erst am ${new Date(info.nextAt).toLocaleDateString('de-DE')} wieder ändern.` });
+    const cost = caseOnly ? 0 : info.cost;
+    let out;
+    try {
+      out = await this.db.tx(async (t) => {
+        const s = (await t.query('SELECT currency FROM user_stats WHERE user_id=$1 FOR UPDATE', [user.id])).rows[0];
+        if (Number(s.currency) < cost) return { code: 402, error: `Nicht genug Münzen (${cost} nötig).` };
+        if ((await t.query('SELECT 1 FROM users WHERE username_lower=$1 AND id<>$2', [lower, user.id])).rows.length) return { code: 409, error: 'Dieser Benutzername ist schon vergeben.' };
+        await t.query(caseOnly ? 'UPDATE users SET username=$2 WHERE id=$1' : 'UPDATE users SET username=$2, username_lower=$3, username_changed_at=now() WHERE id=$1', caseOnly ? [user.id, name] : [user.id, name, lower]);
+        if (cost) await t.query('UPDATE user_stats SET currency = currency - $2 WHERE user_id=$1', [user.id, cost]);
+        return { ok: true };
+      });
+    } catch (e) { if (e.code === '23505' || /unique|duplicate/i.test(e.message)) out = { code: 409, error: 'Dieser Benutzername ist schon vergeben.' }; else throw e; }
+    if (out.error) return this.send(res, out.code, { error: out.error });
+    await this.audit(user, 'rename', user.username, '→ ' + name + (cost ? ' (' + cost + ' Münzen)' : ''));
+    const fresh = await this.db.one('SELECT * FROM users WHERE id=$1', [user.id]);
+    this.send(res, 200, { user: await this.publicUser(fresh), inventory: await this.inventory(fresh) });
   }
   async claimSeason(req, res, user) {
     if (!this.flags.seasons) return this.send(res, 503, { error: 'Seasons sind gerade deaktiviert.' });
@@ -253,6 +308,8 @@ export class Api {
       const ban = this.banInfo(user); if (ban) return this.send(res, 403, { error: 'Dein Konto ist gesperrt.', ban }), true;
       if (m === 'POST' && url === '/api/logout') { await this.db.query('DELETE FROM sessions WHERE token_hash=$1', [hashToken(String(req.headers.authorization).slice(7))]); return this.send(res, 200, { ok: true }), true; }
       if (m === 'GET' && url === '/api/me') return this.send(res, 200, { user: await this.publicUser(user), mutes: (await this.db.all('SELECT u.username FROM mutes m JOIN users u ON u.id=m.muted_id WHERE m.user_id=$1', [user.id])).map(r => r.username) }), true;
+      if (m === 'POST' && url === '/api/profile/customize') return await this.customize(req, res, user), true;
+      if (m === 'POST' && url === '/api/username') return await this.rename(req, res, user), true;
       if (m === 'GET' && url.startsWith('/api/profile/')) {
         if (this.rl.hit('prof:' + user.id, 60, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' }), true;
         const t = await this.db.one('SELECT * FROM users WHERE username_lower=$1', [decodeURIComponent(url.slice(13)).toLowerCase().slice(0, 16)]);

@@ -5,6 +5,14 @@ import { fbm, lerp, smoothstep, clamp } from './util.js';
 import { buildCityArea } from './locs_city.js';
 import { buildIndustryMilitary } from './locs_industry.js';
 import { buildWilds } from './locs_wilds.js';
+import { buildArena } from './map_arena.js';
+
+// Verfügbare Karten. Ranked (und 1-gegen-1) läuft auf der Arena; die Weltkarte ist für alles andere.
+export const MAP_LIST = [
+  { id: 'frontier', name: 'Neon Frontier', desc: 'Die große offene Welt mit Stadt, Wald, Küste und Fort.', size: 'Groß' },
+  { id: 'arena',    name: 'Arena Zero',    desc: 'Kompakte Neon-Arena für Duelle und kleine Teams – kurze Wege, klare Linien.', size: 'Klein' },
+];
+export const MAP_IDS = MAP_LIST.map(x => x.id);
 
 export const SEA_LEVEL = -1.0;
 
@@ -64,8 +72,13 @@ export function grassMask(x, z) {
   return d;
 }
 
+const cachedMaps = {};
+export function buildMap(fresh = false, id = 'frontier') {
+  if (id === 'arena') { if (!fresh && cachedMaps.arena) return cachedMaps.arena; const a = buildArena(); if (!fresh) cachedMaps.arena = a; return a; }
+  return buildFrontier(fresh);
+}
 let cached = null;
-export function buildMap(fresh = false) {
+function buildFrontier(fresh = false) {
   if (cached && !fresh) return cached;
   const mb = new MB(1337);
   mb.terrainY = terrainY;
@@ -141,7 +154,7 @@ export function buildMap(fresh = false) {
   // Spawn-Punkte: Fallbacks im Freien
   if (mb.spawns.length < 8) mb.spawn(0, -100);
   const result = {
-    seed: 1337, size: 400, seaLevel: SEA_LEVEL, zones: ZONES, lake: LAKE,
+    id: 'frontier', name: 'Neon Frontier', seed: 1337, size: 400, extent: 200, bound: 196, terrainR: 258, style: 'open', zoneAt, seaLevel: SEA_LEVEL, zones: ZONES, lake: LAKE,
     terrainY, holes: mb.holes, boxes: mb.boxes, cyls: mb.cyls, parts: mb.parts, props,
     spawns: mb.spawns, pickups: mb.pickups, chests: mb.chests, doors: mb.doors, switches: mb.switches,
     movers: mb.movers, pads: mb.pads, tele: mb.tele, lights: mb.lights, glows: mb.glows, anims: mb.anims,

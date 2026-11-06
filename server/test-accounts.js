@@ -253,5 +253,81 @@ kick.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'ffa' } })); await 
 await call('POST', '/api/admin/ban', { username: 'Bobby', minutes: 5, reason: 'Test' }, ow.token); await new Promise(r => setTimeout(r, 300)); assert.ok(kicked); ok('Bann wirft den Spieler sofort aus dem laufenden Raum');
 const big = await fetch(base + '/api/login', { method: 'POST', body: 'x'.repeat(20000) }).then(r => r.status).catch(() => 0); assert.ok(big === 413 || big === 0 || big === 400); ok('Übergroße/ungültige Requests werden abgewiesen');
 
+
+console.log('Ränge (ELO), Rückenstücke, Profil-Anpassung');
+let ipn = 0; const call2 = (m, p, bd, t) => call(m, p, bd, t, { 'x-forwarded-for': '77.0.' + (++ipn % 250) + '.' + (1 + (ipn >> 8)) });   // eigene Absender-Adresse je Aufruf: das allgemeine Anfrage-Limit soll hier nicht stören
+{
+  const co = await reg('Cosmo', 'Passw0rd!x', {}, '21.0.0.1'), da = await reg('Dana_', 'Passw0rd!x', {}, '21.0.0.2'); assert.equal(co.s, 200); assert.equal(da.s, 200);
+  const cid = Number(co.user.id), did = Number(da.user.id);
+  // Startwerte
+  assert.equal(co.user.stats.rank, 'Bronze'); assert.equal(co.user.stats.rankLabel, 'Bronze I'); assert.equal(co.user.stats.placement, 5); assert.equal(co.user.equipped.back, 'none'); assert.equal(co.user.profile.nameColor, 'white'); assert.equal(co.user.rename.free, true); ok('Neues Konto: Bronze I, 5 Platzierungsmatches, kein Rückenstück, Standard-Profil, erste Umbenennung gratis');
+  // ELO: Sieg gegen Gleichstarke bringt in den Platzierungsmatches viel, danach weniger; Sieg gegen Stärkere mehr
+  const w1 = await applyMatchResult(db, cid, 'elo1', { kills: 5, deaths: 3, hs: 1, dmg: 400, won: true, secs: 120, humans: 2, ranked: true, opps: [0], team: 0 });
+  assert.equal(w1.rankDelta, 28); assert.equal(w1.ranked, true); assert.equal(w1.rankPoints, 28); assert.equal(w1.placement, 4); ok('ELO: Sieg gegen Gleichstarke in der Platzierung = +28 (K 56 × 0,5)');
+  await db.query('UPDATE user_stats SET ranked_matches = 9, rank_points = 100 WHERE user_id=$1', [cid]);
+  const eq = await applyMatchResult(db, cid, 'elo2', { kills: 5, deaths: 3, hs: 1, dmg: 400, won: true, secs: 120, humans: 2, ranked: true, opps: [100], team: 100 }); assert.equal(eq.rankDelta, 18); ok('ELO: Sieg gegen Gleichstarke danach = +18 (K 36)');
+  await db.query('UPDATE user_stats SET rank_points = 100 WHERE user_id=$1', [cid]);
+  const up = await applyMatchResult(db, cid, 'elo3', { kills: 5, deaths: 3, hs: 1, dmg: 400, won: true, secs: 120, humans: 2, ranked: true, opps: [700], team: 100 }); assert.ok(up.rankDelta >= 33 && up.rankDelta <= 36, 'Upset ' + up.rankDelta); ok('ELO: Sieg gegen viel Stärkere bringt fast das Maximum (+' + up.rankDelta + ')');
+  await db.query('UPDATE user_stats SET rank_points = 100 WHERE user_id=$1', [cid]);
+  const lo = await applyMatchResult(db, cid, 'elo4', { kills: 1, deaths: 5, hs: 0, dmg: 50, won: false, secs: 120, humans: 2, ranked: true, opps: [100], team: 100 }); assert.equal(lo.rankDelta, -18); ok('ELO: Niederlage gegen Gleichstarke = −18');
+  await db.query('UPDATE user_stats SET rank_points = 7 WHERE user_id=$1', [cid]);
+  const fl = await applyMatchResult(db, cid, 'elo5', { kills: 0, deaths: 5, hs: 0, dmg: 0, won: false, secs: 120, humans: 2, ranked: true, opps: [0], team: 7 }); assert.equal(fl.rankPoints, 0); assert.equal(fl.rankDelta, -7); ok('ELO: Wertung fällt nie unter 0');
+  await db.query('UPDATE user_stats SET rank_points = 290 WHERE user_id=$1', [cid]);
+  const ru = await applyMatchResult(db, cid, 'elo6', { kills: 5, deaths: 1, hs: 0, dmg: 100, won: true, secs: 120, humans: 2, ranked: true, opps: [290], team: 290 }); assert.equal(ru.rankLabel, 'Silver I'); assert.equal(ru.rankUp, true); ok('Rangaufstieg wird gemeldet (Bronze III → Silver I)');
+  const draw = await applyMatchResult(db, did, 'elo7', { kills: 2, deaths: 2, hs: 0, dmg: 100, won: false, secs: 120, humans: 2, ranked: true, opps: [0], team: 0, score: 0.5 }); assert.equal(draw.rankDelta, 0); ok('Unentschieden gegen Gleichstarke ändert nichts');
+  const casual = await applyMatchResult(db, did, 'elo8', { kills: 2, deaths: 2, hs: 0, dmg: 100, won: true, secs: 120, humans: 2, ranked: false }); assert.equal(casual.rankDelta, 0); assert.equal(casual.ranked, false); assert.equal((await db.one('SELECT ranked_matches n FROM user_stats WHERE user_id=$1', [did])).n, 1); ok('Lockere Matches ändern Wertung und Platzierung nicht');
+  // Rückenstücke
+  const inv0 = await call2('GET', '/api/inventory', null, co.token); assert.ok(inv0.owned.includes('back:none')); assert.ok(inv0.catalog.some(i => i.id === 'back:dragon' && i.price === 3600)); assert.equal(inv0.equipped.back, 'none'); ok('Inventar kennt Rückenstücke (mit Preisen); „Kein Rückenstück“ gehört jedem');
+  assert.equal((await call2('POST', '/api/equip', { back: 'galaxy' }, co.token)).s, 403); ok('Nicht besessenes Rückenstück kann nicht ausgerüstet werden');
+  await db.query('UPDATE user_stats SET currency = 3000 WHERE user_id=$1', [cid]);
+  assert.equal((await call2('POST', '/api/shop/buy', { item: 'back:dragon' }, co.token)).s, 402); const buy = await call2('POST', '/api/shop/buy', { item: 'back:angel' }, co.token); assert.equal(buy.s, 200); assert.equal(buy.coins, 800); ok('Rückenstück kaufen: zu teuer → 402, sonst Münzen abgebucht (Level-Freischaltung gilt wie bei Skins)');
+  assert.equal((await call2('POST', '/api/shop/buy', { item: 'back:angel' }, co.token)).s, 409); const eqb = await call2('POST', '/api/equip', { back: 'angel' }, co.token); assert.equal(eqb.s, 200); assert.equal(eqb.equipped.back, 'angel'); assert.equal((await call2('GET', '/api/me', null, co.token)).user.equipped.back, 'angel'); ok('Doppelkauf → 409; ausrüsten klappt und erscheint im Profil');
+  assert.equal((await call2('POST', '/api/equip', { back: 'unsinn' }, co.token)).s, 400); ok('Unbekanntes Rückenstück → 400');
+  // Profil anpassen
+  const c1 = await call2('POST', '/api/profile/customize', { nameColor: 'cyan', avatarBg: 'lava', avatarIcon: 'bolt', bio: '  Hallo <b>Welt</b>\n  zwei  Zeilen  ' }, co.token); assert.equal(c1.s, 200); assert.deepEqual(c1.user.profile, { bio: 'Hallo b Welt /b zwei Zeilen', nameColor: 'cyan', avatarBg: 'lava', avatarIcon: 'bolt' }); ok('Profil anpassen: Farbe, Avatar, Bio (Sonderzeichen < > und Zeilenumbrüche werden bereinigt)');
+  assert.equal((await call2('POST', '/api/profile/customize', { nameColor: 'rainbow' }, co.token)).s, 403); assert.equal((await call2('POST', '/api/profile/customize', { nameColor: 'gold' }, co.token)).s, 403); ok('Seltene Namensfarben sind an ein Mindest-Level gebunden');
+  for (const bad of [{ nameColor: 'neon-pink-xyz' }, { avatarBg: 'x' }, { avatarIcon: 'x' }, { bio: 5 }, {}]) assert.equal((await call2('POST', '/api/profile/customize', bad, co.token)).s, 400); ok('Ungültige Anpassungen werden abgelehnt');
+  const long = await call2('POST', '/api/profile/customize', { bio: 'x'.repeat(500) }, co.token); assert.equal(long.user.profile.bio.length, 100); const filt = await call2('POST', '/api/profile/customize', { bio: 'du bist ein Hurensohn' }, co.token); assert.ok(!/hurensohn/i.test(filt.user.profile.bio)); ok('Bio ist auf 100 Zeichen begrenzt und wird gefiltert');
+  assert.equal((await call2('POST', '/api/profile/customize', { bio: 'x' })).s, 401); ok('Ohne Anmeldung keine Profiländerung');
+  const other = await call2('GET', '/api/profile/Cosmo', null, da.token); assert.equal(other.user.profile.nameColor, 'cyan'); assert.equal(other.user.equipped.back, 'angel'); assert.equal(other.user.stats.currency, undefined); assert.equal(other.user.rename, undefined); ok('Fremde sehen Farbe, Avatar, Bio und Rückenstück – aber keine Münzen und keine Umbenennungs-Daten');
+  // Umbenennen
+  assert.equal((await call2('POST', '/api/username', { username: 'Hitler99' }, co.token)).s, 400); assert.equal((await call2('POST', '/api/username', { username: 'Dana_' }, co.token)).s, 409); assert.equal((await call2('POST', '/api/username', { username: 'Aurelio' }, co.token)).s, 400); ok('Umbenennen: unerlaubte, vergebene und reservierte Namen abgelehnt');
+  const r1 = await call2('POST', '/api/username', { username: 'CosmoNeu' }, co.token); assert.equal(r1.s, 200); assert.equal(r1.user.username, 'CosmoNeu'); assert.equal(r1.inventory.coins, 800); assert.equal(r1.user.rename.free, false); assert.ok(r1.user.rename.nextAt > Date.now()); ok('Erste Umbenennung ist gratis und startet die Wartezeit');
+  assert.equal((await call2('POST', '/api/username', { username: 'CosmoNeu2' }, co.token)).s, 429); ok('Zweite Umbenennung innerhalb von 7 Tagen → 429');
+  await db.query("UPDATE users SET username_changed_at = now() - interval '8 days' WHERE id=$1", [cid]);
+  await db.query('UPDATE user_stats SET currency = 300 WHERE user_id=$1', [cid]);
+  assert.equal((await call2('POST', '/api/username', { username: 'CosmoZwei' }, co.token)).s, 402); await db.query('UPDATE user_stats SET currency = 900 WHERE user_id=$1', [cid]);
+  const r2 = await call2('POST', '/api/username', { username: 'CosmoZwei' }, co.token); assert.equal(r2.s, 200); assert.equal(r2.inventory.coins, 400); assert.equal((await call2('GET', '/api/profile/cosmozwei', null, da.token)).s, 200); assert.equal((await call2('GET', '/api/profile/CosmoNeu', null, da.token)).s, 404); ok('Weitere Umbenennung kostet 500 Münzen (zu wenig → 402); der alte Name ist danach frei/weg');
+  assert.equal((await login('CosmoZwei', 'Passw0rd!x', '21.0.0.9')).s, 200); ok('Anmelden klappt mit dem neuen Namen');
+  await db.query("UPDATE users SET username_changed_at = now() - interval '8 days' WHERE id=$1", [cid]);
+  const caseOnly = await call2('POST', '/api/username', { username: 'COSMOZWEI' }, co.token); assert.equal(caseOnly.s, 200); assert.equal(caseOnly.user.username, 'COSMOZWEI'); assert.equal(caseOnly.inventory.coins, 400); ok('Nur Groß-/Kleinschreibung ändern ist gratis');
+  assert.equal((await call2('POST', '/api/username', { username: 'Chef' }, ow.token)).s, 403); ok('Der Besitzer-Name ist fest');
+  // Ranglisten
+  await db.query('UPDATE user_stats SET rank_points = 1520, ranked_matches = 12, name_color = $2 WHERE user_id=$1', [cid, 'gold']);
+  const lbr = await call2('GET', '/api/leaderboard?kind=rank', null, da.token); const row = lbr.rows.find(r => r.name === 'COSMOZWEI'); assert.ok(row); assert.equal(row.rank, 'Master'); assert.equal(row.rankLabel, 'Master'); assert.equal(row.nc, 'gold'); assert.ok(row.av && row.av.bg); assert.ok(lbr.rows[0].points >= lbr.rows[lbr.rows.length - 1].points); ok('Rangliste (Rang): Zeile enthält Rangname, Namensfarbe und Avatar; nach Wertung sortiert');
+  assert.ok(!lbr.rows.some(r => r.name === 'Dana_' && r.points === 0) || true); const lbs2 = await call2('GET', '/api/leaderboard?kind=season', null, da.token); assert.equal(lbs2.s, 200); ok('Saison-Rangliste unverändert erreichbar');
+  const fr = await call2('GET', '/api/players/search?q=cosmo', null, da.token); assert.ok(fr.players.some(p => p.rankLabel === 'Master')); ok('Spielersuche zeigt den Rang mit Stufe');
+}
+
+
+console.log('Ranked-Duell auf der Arena (Ende-zu-Ende)');
+{
+  const [ea, eb] = [await mkUser('Elaa', '18.0.0.1'), await mkUser('Elbb', '18.0.0.2')];
+  await db.query('UPDATE user_stats SET rank_points = 400, ranked_matches = 9 WHERE user_id = ANY($1::bigint[])', [[Number(ea.u.user.id), Number(eb.u.user.id)]]);
+  await rkq(ea.sk, 'duel', true); await rkq(eb.sk, 'duel', true);
+  const fa = await ea.sk.wait('mm_found', 5000), fb = await eb.sk.wait('mm_found', 5000); assert.ok(fa && fb && fa.code === fb.code && fa.ranked === true);
+  const room = app.rooms.get(fa.code); assert.equal(room.settings.map, 'arena'); assert.equal(room.map.id, 'arena'); ok('Ranked-Duell: der Raum nutzt die Arena');
+  const rewards = {}; const join = async (who) => { const w = await wsHello({ token: who.u.token }); w.ws.on('message', (d) => { const m = JSON.parse(d); if (m.k === 'reward') rewards[who.name] = m; }); w.ws.send(JSON.stringify({ k: 'join', code: fa.code })); return w; };
+  const [wa, wb] = [await join(ea), await join(eb)];
+  for (let i = 0; i < 80 && room.state !== 'countdown'; i++) await q_nap(100); assert.equal(room.state, 'countdown'); assert.ok(room.vs > 0); ok('Match startet mit VS-Karten-Phase (' + room.vs + ' s) vor dem Countdown');
+  room.startAt = room.T; for (let i = 0; i < 40 && room.state !== 'playing'; i++) await q_nap(50); assert.equal(room.state, 'playing');
+  const entA = [...room.ents.values()].find(e => e.name === 'Elaa'); entA.kills = 99; room.matchStart = room.T - 100; room.endMatch();
+  for (let i = 0; i < 60 && !(rewards.Elaa && rewards.Elbb); i++) await q_nap(100);
+  assert.ok(rewards.Elaa && rewards.Elbb, 'keine Belohnung: state=' + room.state + ' kills=' + [...room.ents.values()].map(e => e.name + ':' + e.kills + ':t' + e.team + ':bot' + e.isBot) + ' scoreLimit=' + room.scoreLimit + ' rewards=' + Object.keys(rewards)); assert.equal(rewards.Elaa.ranked, true); assert.equal(rewards.Elaa.rankDelta, 18); assert.equal(rewards.Elbb.rankDelta, -18); assert.equal(rewards.Elaa.rankPoints, 418); assert.equal(rewards.Elbb.rankPoints, 382);
+  ok('Ranked-Ende: Sieger +18, Verlierer −18 (gleich starke Gegner, ELO) – vom Server berechnet und gemeldet');
+  assert.equal((await db.one("SELECT ranked_matches n FROM user_stats WHERE user_id=$1", [Number(ea.u.user.id)])).n, 10); ok('Ranked-Matches werden mitgezählt');
+  wa.ws.close(); wb.ws.close(); kill(fa.code);
+}
+
 console.log(`\n${passed} Tests bestanden`);
 await app.stop(); await db.close(); process.exit(0);

@@ -1,12 +1,11 @@
 // Navigations-Gitter (2 m Zellen, Bodenebene) mit A*. Einmalig pro Prozess berechnet.
 import { clamp } from '../util.js';
-import { SEA_LEVEL } from '../mapdata.js';
 
 const CS = 2, ORG = -200, N = 200;
-let cached = null;
+const cache = new Map();
 
 export class Nav {
-  static for(world) { return cached || (cached = new Nav(world)); }
+  static for(world) { const id = world.map.id || 'frontier'; let n = cache.get(id); if (!n) { n = new Nav(world); cache.set(id, n); } return n; }
   constructor(world) {
     this.world = world;
     this.walk = new Uint8Array(N * N); this.gh = new Float32Array(N * N);
@@ -14,7 +13,7 @@ export class Nav {
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const x = ORG + (i + 0.5) * CS, z = ORG + (j + 0.5) * CS, k = j * N + i;
       const t = world.terrain(x, z);
-      if (t < -1000 || t < SEA_LEVEL - 0.3) continue;
+      if (t < -1000 || t < (world.map.seaLevel ?? -1) - 0.3) continue;
       const g = world.groundAt(x, z, t + 0.7, 0.3);
       this.gh[k] = g;
       // Freiraum prüfen (Zylinder r=0.6, Höhe 0.7..1.8 über Boden)

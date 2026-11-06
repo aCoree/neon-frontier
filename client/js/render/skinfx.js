@@ -7,18 +7,18 @@ const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // Teilgeometrie platzieren und mit einer Vertex-Farbe versehen (alle Teile werden danach zu einem Mesh verschmolzen)
-function part(geo, color, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
+export function part(geo, color, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
   const g = geo.index ? geo.toNonIndexed() : geo.clone();
   M4.compose(V.set(x, y, z), Q.setFromEuler(E.set(rx, ry, rz)), S.set(sx, sy, sz)); g.applyMatrix4(M4);
   g.deleteAttribute('uv'); paint(g, color); return g;
 }
-function paint(g, color, k = 1) {
+export function paint(g, color, k = 1) {
   C.set(color); const n = g.attributes.position.count, a = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) { a[i * 3] = C.r * k; a[i * 3 + 1] = C.g * k; a[i * 3 + 2] = C.b * k; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g;
 }
-const merge = (list) => { const m = mergeGeometries(list); list.forEach(x => x.dispose()); return m; };
-const blade = (w, L, t) => new THREE.BoxGeometry(w, L, t).translate(0, L / 2, 0);      // Fuß am Ursprung, wächst nach +Y
-const spike = (r, L, seg = 5) => new THREE.ConeGeometry(r, L, seg).translate(0, L / 2, 0);
+export const merge = (list) => { const m = mergeGeometries(list); list.forEach(x => x.dispose()); return m; };
+export const blade = (w, L, t) => new THREE.BoxGeometry(w, L, t).translate(0, L / 2, 0);      // Fuß am Ursprung, wächst nach +Y
+export const spike = (r, L, seg = 5) => new THREE.ConeGeometry(r, L, seg).translate(0, L / 2, 0);
 
 // Tuch (Umhang/Bänder): Gitter, dessen Eckpunkte pro Frame schwingen
 function cloth(w, h, ws, hs, x, y, z, colorAt) {

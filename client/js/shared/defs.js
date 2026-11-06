@@ -156,13 +156,50 @@ export const LOOT = {
 };
 export const AMMO_GIVE = { light: 60, shells: 12, sniper: 10, rockets: 4, energy: 80 };
 
+// ---- Rückenstücke ("Back Bling"): reine Deko am Rücken, mit Münzen kaufbar (oder gratis ab dem genannten Level) ----
+export const BACKS = [
+  { id: 'none',    name: 'Kein Rückenstück', level: 1,  rarity: 'common',    price: 0,    blurb: 'Freier Rücken – für Puristen.' },
+  { id: 'pack',    name: 'Taktik-Rucksack',  level: 2,  rarity: 'common',    price: 120,  fx: ['pocket'], blurb: 'Solider Feld-Rucksack mit Seitentaschen und Signalpatch.' },
+  { id: 'sniper',  name: 'Langwaffe',        level: 5,  rarity: 'rare',      price: 300,  fx: ['scope'], blurb: 'Ein Präzisionsgewehr, quer über den Rücken geschnallt.' },
+  { id: 'jetpack', name: 'Düsenpack',        level: 7,  rarity: 'rare',      price: 450,  fx: ['flame'], blurb: 'Zwei Triebwerke mit flackernder Flamme.' },
+  { id: 'shield',  name: 'Aegis-Schild',     level: 11, rarity: 'epic',      price: 750,  fx: ['glow', 'sway'], blurb: 'Hexagon-Schild mit leuchtendem Rand.' },
+  { id: 'drone',   name: 'Begleit-Drohne',   level: 14, rarity: 'epic',      price: 1100, fx: ['float', 'glow'], blurb: 'Eine kleine Drohne schwebt hinter deiner Schulter.' },
+  { id: 'reactor', name: 'Mini-Reaktor',     level: 18, rarity: 'epic',      price: 1500, fx: ['spin', 'glow'], blurb: 'Rotierende Ringe um einen pulsierenden Kern.' },
+  { id: 'angel',   name: 'Engelsflügel',     level: 24, rarity: 'legendary', price: 2200, fx: ['wings', 'flap', 'glow'], blurb: 'Weiße Federn mit goldenem Schimmer.' },
+  { id: 'demon',   name: 'Dämonenschwingen', level: 28, rarity: 'legendary', price: 2600, fx: ['wings', 'flap', 'glow'], blurb: 'Lederflügel mit glühenden Adern.' },
+  { id: 'dragon',  name: 'Drachenschwingen', level: 36, rarity: 'mythic',    price: 3600, fx: ['wings', 'flap', 'glow', 'embers'], blurb: 'Gewaltige Schwingen, Rückenstacheln und aufsteigende Glut.' },
+  { id: 'galaxy',  name: 'Galaxie-Portal',   level: 50, rarity: 'mythic',    price: 4800, fx: ['portal', 'spin', 'hue'], blurb: 'Ein kreisendes Sternen-Portal mit wandernden Farben.' },
+];
+
 // ---- Shop-Katalog (Cosmetics): Server prüft Besitz & Preis, der Client zeigt nur an ----
 export const CATALOG = [
   ...SKINS.map(s => ({ id: 'skin:' + s.id, type: 'skin', ref: s.id, name: s.name, level: s.level, price: s.level <= 1 ? 0 : s.level * 90 })),
   ...WSKINS.map(s => ({ id: 'wskin:' + s.id, type: 'wskin', ref: s.id, name: s.name, level: s.level, price: s.level <= 1 ? 0 : s.level * 70 })),
+  ...BACKS.map(s => ({ id: 'back:' + s.id, type: 'back', ref: s.id, name: s.name, level: s.level, price: s.price })),
 ];
 export const CATALOG_BY_ID = Object.fromEntries(CATALOG.map(i => [i.id, i]));
-export const DEFAULT_ITEMS = ['skin:vanguard', 'wskin:default'];
+export const DEFAULT_ITEMS = ['skin:vanguard', 'wskin:default', 'back:none'];
+
+// ---- Profil-Anpassung: Namensfarbe, Avatar (Hintergrund + Symbol), Bio. Der Server prüft die IDs; `req` = Mindest-Level. ----
+export const NAME_COLORS = [
+  { id: 'white', name: 'Weiß', color: '#ffffff', req: 1 }, { id: 'cyan', name: 'Cyan', color: '#7ee8ff', req: 1 }, { id: 'mint', name: 'Mint', color: '#5cffb0', req: 1 },
+  { id: 'lime', name: 'Lime', color: '#c4ff5c', req: 1 }, { id: 'orange', name: 'Orange', color: '#ffa43c', req: 1 }, { id: 'red', name: 'Rot', color: '#ff6666', req: 1 },
+  { id: 'pink', name: 'Pink', color: '#ff7ad1', req: 1 }, { id: 'violet', name: 'Violett', color: '#b88cff', req: 1 }, { id: 'blue', name: 'Blau', color: '#6aa8ff', req: 1 },
+  { id: 'gold', name: 'Gold', color: '#ffd24a', req: 10 }, { id: 'rank', name: 'Rang-Farbe', color: null, req: 5 }, { id: 'rainbow', name: 'Regenbogen', color: null, req: 25 },
+];
+export const AVATAR_BGS = [
+  ['ocean', '#1b6fb5', '#0a2748'], ['ember', '#e0562a', '#4a1208'], ['forest', '#3f9a54', '#0f2c1a'], ['violet', '#8a52e0', '#24104a'], ['rose', '#e0509a', '#4a0f2c'], ['gold', '#e0b030', '#4a3408'],
+  ['steel', '#7d8aa0', '#1a202c'], ['ice', '#58d0e8', '#0c3340'], ['night', '#2a3a66', '#080c1c'], ['lava', '#ff7a1a', '#3a0a06'], ['toxic', '#9be035', '#1c2e08'], ['mono', '#e8edf5', '#3a4254'],
+].map(([id, c1, c2]) => ({ id, c1, c2 }));
+export const AVATAR_ICONS = [
+  { id: 'skin', name: 'Dein Skin' }, { id: 'bolt', name: 'Blitz', ch: '⚡' }, { id: 'fire', name: 'Feuer', ch: '🔥' }, { id: 'skull', name: 'Totenkopf', ch: '💀' }, { id: 'crown', name: 'Krone', ch: '👑' },
+  { id: 'target', name: 'Zielscheibe', ch: '🎯' }, { id: 'wolf', name: 'Wolf', ch: '🐺' }, { id: 'dragon', name: 'Drache', ch: '🐉' }, { id: 'rocket', name: 'Rakete', ch: '🚀' },
+  { id: 'snow', name: 'Eis', ch: '❄️' }, { id: 'moon', name: 'Mond', ch: '🌙' }, { id: 'gem', name: 'Juwel', ch: '💎' }, { id: 'pad', name: 'Controller', ch: '🎮' },
+];
+export const RENAME_COST = 500;      // Münzen für jede Namensänderung – die erste ist gratis
+export const RENAME_COOLDOWN_DAYS = 7;
+export const BIO_MAX = 100;
+
 export const DAILY_REWARDS = [{ coins: 50 }, { xp: 100 }, { coins: 75 }, { coins: 100 }, { xp: 200 }, { coins: 150 }, { coins: 300, item: true }];
 
 // ---- Seasons: Monats-Saisons, Punkte kommen ausschließlich vom Server (aus der Match-Belohnung) ----

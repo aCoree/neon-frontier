@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "test": "node server/test.js && node server/test-emotes.js && node server/test-party.js && node server/test-matchmaker.js && node server/test-inventory.js && node server/test-fall.js && node server/test-movement.js && node server/test-backup.js && node server/test-accounts.js",
+    "test": "node server/test.js && node server/test-emotes.js && node server/test-party.js && node server/test-matchmaker.js && node server/test-inventory.js && node server/test-fall.js && node server/test-movement.js && node server/test-ranks.js && node server/test-arena.js && node server/test-backup.js && node server/test-accounts.js",
     "mptest": "node server/tools/mptest.mjs",
     "backup": "node server/tools/backup.mjs",
     "test:accounts": "node server/test-accounts.js",

@@ -162,20 +162,47 @@
 
 <!-- ================= PROFIL ================= -->
 <section id="s-profile" class="screen">
-  <div class="prof-panel">
-    <header class="pf-top"><button class="back" data-back>‹ Zurück</button><span class="pf-kicker" id="pf-title">Profil</span></header>
-    <div class="pf-hero">
-      <div class="pf-av" id="pf-av">?</div>
-      <div class="pf-id"><div class="pf-name" id="pf-name"></div><div class="pf-tags" id="pf-tags"></div><p class="pf-since" id="pf-since"></p></div>
-      <div class="pf-lvl"><b id="pf-lvl">1</b><small>LEVEL</small></div>
+  <div class="pp">
+    <header class="pp-head"><button class="back" data-back>‹ Zurück</button><span class="pf-kicker" id="pf-title">Profil</span><span class="pp-sp"></span><button class="btn small" id="pf-editbtn">✎ Profil bearbeiten</button></header>
+    <div class="pp-body">
+      <div class="pp-col pp-l">
+        <div class="pp-id">
+          <div id="pf-av"></div>
+          <div class="pp-who"><div class="pf-name" id="pf-name"></div><div class="pf-tags" id="pf-tags"></div></div>
+          <div class="pf-lvl"><b id="pf-lvl">1</b><small>LEVEL</small></div>
+        </div>
+        <p class="pp-bio" id="pf-bio"></p>
+        <div class="pf-xpwrap"><div class="xb pf-xb"><i id="pf-xp" style="width:0%"></i></div><small class="pf-sm" id="pf-xptxt"></small></div>
+        <div class="pp-rank" id="pf-rank"></div>
+      </div>
+      <div class="pp-col pp-r">
+        <div class="pf-stats" id="pf-stats"></div>
+        <div class="pf-gear" id="pf-gear"></div>
+        <div class="row" id="pf-actions"></div>
+        <p class="pf-since" id="pf-since"></p>
+      </div>
     </div>
-    <div class="pf-xpwrap"><div class="xb pf-xb"><i id="pf-xp" style="width:0%"></i></div><small class="pf-sm" id="pf-xptxt"></small></div>
-    <div class="pf-rank" id="pf-rank"></div>
-    <h4>Statistik</h4>
-    <div class="pf-stats" id="pf-stats"></div>
-    <h4>Ausrüstung</h4>
-    <div class="pf-gear" id="pf-gear"></div>
-    <div class="row" id="pf-actions"></div>
+  </div>
+  <div class="pp-stage" id="pp-stage"><span class="shop-hint">↺ Ziehen zum Drehen · Mausrad zoomt</span></div>
+  <div class="pe" id="pf-edit"><div class="pe-box">
+    <h3>Profil bearbeiten</h3>
+    <div class="pe-prev" id="pe-prev"></div>
+    <div class="pe-grid">
+      <div class="pe-sec"><h5>Benutzername</h5><div class="pe-row"><input id="pe-name" maxlength="16" autocomplete="off" spellcheck="false"><button class="btn small" id="pe-rename">Namen ändern</button></div><small id="pe-rename-note"></small></div>
+      <div class="pe-sec"><h5>Bio <em id="pe-bio-n">0/100</em></h5><textarea id="pe-bio" rows="2" placeholder="Schreib etwas über dich …"></textarea></div>
+      <div class="pe-sec wide"><h5>Namensfarbe</h5><div class="pe-sw" id="pe-nc"></div></div>
+      <div class="pe-sec"><h5>Avatar-Hintergrund</h5><div class="pe-sw sq" id="pe-bg"></div></div>
+      <div class="pe-sec"><h5>Avatar-Symbol</h5><div class="pe-sw sq" id="pe-ic"></div></div>
+    </div>
+    <div class="pe-act"><button class="btn" id="pe-cancel">Schließen</button><button class="btn primary" id="pe-save">Speichern</button></div>
+  </div></div>
+</section>
+<section id="s-ranks" class="screen">
+  <div class="rp">
+    <header class="rp-top"><button class="back" data-back>‹ Zurück</button><div class="sp-title"><small>Dein Weg nach oben</small><h2>Rangpfad</h2></div></header>
+    <div class="rp-now" id="rp-now"></div>
+    <div class="rp-wrap"><button class="rp-arr l" id="rp-l" aria-label="Zurück">‹</button><div class="rp-scroll" id="rp-scroll"><div class="rp-track" id="rp-track"></div></div><button class="rp-arr r" id="rp-r" aria-label="Weiter">›</button></div>
+    <p class="rp-note">Jeder Ranked-Sieg gegen stärkere Gegner bringt mehr Wertung (ELO). Bronze bis Diamond haben drei Stufen, Master und Champion sind je ein einziger Rang. Die ersten 5 Ranked-Matches bewegen die Wertung doppelt.</p>
   </div>
 </section>
 
@@ -210,6 +237,8 @@
         <div class="slider"><input type="range" id="solo-bots" min="1" max="11" value="5"><b id="solo-bots-v">5</b></div>
         <h4>Matchdauer</h4>
         <div class="seg" id="solo-time"><button data-v="3">3 min</button><button data-v="6" class="on">6 min</button><button data-v="10">10 min</button></div>
+        <h4>Karte</h4>
+        <div class="seg maps" id="solo-map"><button data-v="frontier" class="on">Neon Frontier <small>groß</small></button><button data-v="arena">Arena Zero <small>kompakt</small></button></div>
         <h4>Tageszeit</h4>
         <div class="seg" id="solo-tod"><button data-v="day" class="on">Tag</button><button data-v="sunset">Abend</button><button data-v="night">Nacht</button><button data-v="dynamic">Dynamisch</button></div>
         <div class="row end"><button class="btn primary big" id="solo-start">Match starten</button></div>
@@ -264,6 +293,7 @@
           <label>Schwierigkeit<div class="seg" id="lb-diff"><button data-v="easy">Einfach</button><button data-v="normal">Normal</button><button data-v="hard">Schwer</button></div></label>
           <label>Zeitlimit<div class="seg" id="lb-time"><button data-v="3">3</button><button data-v="6">6</button><button data-v="10">10</button><button data-v="15">15 min</button></div></label>
           <label>Punktelimit<div class="seg" id="lb-score"><button data-v="0">Standard</button><button data-v="10">10</button><button data-v="25">25</button><button data-v="50">50</button></div></label>
+          <label>Karte<div class="seg maps" id="lb-map"><button data-v="frontier">Neon Frontier</button><button data-v="arena">Arena Zero</button></div></label>
           <label>Tageszeit<div class="seg" id="lb-tod"><button data-v="day">Tag</button><button data-v="sunset">Abend</button><button data-v="night">Nacht</button><button data-v="dynamic">Dyn.</button></div></label>
           <label class="chk"><input type="checkbox" id="lb-fill"> Freie Plätze mit Bots füllen</label>
         </div>
@@ -277,7 +307,7 @@
 <section id="s-skins" class="screen shop">
   <div class="shop-left">
     <header class="shop-head"><button class="back" data-back>‹ Zurück</button><h2>Garderobe</h2><div class="shop-coins" id="shop-coins"></div></header>
-    <div class="shop-tabs" id="shop-tabs"><button class="on" data-tab="skin">Charaktere</button><button data-tab="wskin">Waffen-Skins</button></div>
+    <div class="shop-tabs" id="shop-tabs"><button class="on" data-tab="skin">Charaktere</button><button data-tab="wskin">Waffen-Skins</button><button data-tab="back">Rücken</button></div>
     <div class="shop-grid" id="shop-grid"></div>
     <div class="shop-foot"><span>Vorschau-Waffe</span><div class="seg wrap" id="skin-weapon"></div></div>
   </div>
@@ -362,6 +392,7 @@
   <div class="h-banner" id="banner"></div>
   <div class="h-killbanner" id="killbanner"></div>
   <div class="h-count" id="countdown"></div>
+  <div id="vs" class="vs"></div>
   <div class="h-vitals">
     <div class="h-pw" id="pw"></div>
     <div class="bar-shield"><i id="b-shield"></i><b id="n-shield">0</b></div>

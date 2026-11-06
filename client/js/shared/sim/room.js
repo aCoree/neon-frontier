@@ -1,7 +1,7 @@
 // Autoritative Raum-Simulation: Lobby, Match, Treffer, Projektile, Pickups, Türen, Events. Läuft auf dem Node-Server UND (offline) im Browser.
-import { WEAPONS, THROWABLES, CONSUMABLES, POWERUPS, GADGETS, MODES, TEAMS, DIFFS, PLAYER, START_LOADOUT, NET, FL, LOOT, AMMO_GIVE, EMOTES, EMOTE_COOLDOWN } from '../defs.js';
+import { WEAPONS, THROWABLES, CONSUMABLES, POWERUPS, GADGETS, MODES, TEAMS, DIFFS, PLAYER, START_LOADOUT, NET, FL, LOOT, AMMO_GIVE, EMOTES, EMOTE_COOLDOWN, SKINS, WSKINS, BACKS, NAME_COLORS, AVATAR_BGS, AVATAR_ICONS } from '../defs.js';
 import { World, rayCylinder } from '../world.js';
-import { buildMap, moverY } from '../mapdata.js';
+import { buildMap, moverY, MAP_IDS } from '../mapdata.js';
 import { spreadDirs, mulberry32, clamp, lerp } from '../util.js';
 import { Nav } from './nav.js';
 import { Bots } from './bots.js';
@@ -14,19 +14,30 @@ export const FALL_SAFE = 5.5, FALL_DMG_PER_M = 7, FALL_LAUNCH_VY = 10.5;   // Me
 // Bewegungsprüfung (serverseitig): Tempo-Budget statt starrem Limit. Erlaubte Geschwindigkeit hängt vom Zustand ab, den der SERVER kennt
 // (Speed-Boost, Dash-Abklingzeit, Gadget im Besitz, Sprungplatte in der Nähe, kürzlich Schaden erlitten). Teleports gelten nur an erlaubten Zielen.
 export const MOVE = { base: 9.6, boost: 12.6, dash: 21, grapple: 33, jet: 19, pad: 30, hurt: 24, bucket: 1.5, slack: 0.6, up: 13, upPad: 34, upJet: 16, airMax: 9 };
+export const VS_SECS = 4.5;   // so lange steht die Gegner-Karte („A gegen B“) vor dem Countdown
 export const MAX_WEAPONS = 5;   // Plätze: Viper + Klinge + 3 gefundene Waffen
 const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr', 'drop', 'lowgrav', 'supply', 'supplyland', 'toast', 'join', 'leave', 'spawn', 'drone']);
 
 export class Room {
   constructor(code, opts = {}) {
     this.hooks = opts.hooks || null; this.code = code; this.members = new Map(); this.ents = new Map(); this.state = 'lobby'; this.hostId = null;
-    this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, ...(opts.settings || {}), ranked: opts.ranked === true };   // Ranked kann nur der Server setzen (Matchmaking), nie ein Client über die Einstellungen
+    this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, map: 'frontier', ...(opts.settings || {}), ranked: opts.ranked === true };
+    if (!MAP_IDS.includes(this.settings.map)) this.settings.map = 'frontier';
+    if (this.settings.ranked) this.settings.map = 'arena';   // Ranked wird immer auf der Arena gespielt   // Ranked kann nur der Server setzen (Matchmaking), nie ein Client über die Einstellungen
     this.local = !!opts.local;
     this.T = 0; this.last = Date.now(); this.tickN = 0; this.ev = []; this.emptyAt = 0;
     this.rng = mulberry32((Date.now() & 0xffffff) ^ 0x5bd1e995);
     this.nextId = 1; this.projs = []; this.dyn = []; this.smokes = []; this.drones = []; this.supplies = [];
     this.lowgravUntil = 0; this.endAt = 0; this.startAt = 0; this.matchEnd = 0; this.lastClock = 0;
-    this.map = buildMap(true); this.map.parts = []; this.map.props = []; this.map.glows = []; this.map.lights = []; this.map.anims = []; this.map.labels = []; // nur Render-Daten, Server braucht sie nicht
+    this.loadMap(this.settings.map);
+    this.lastHistT = 0;
+  }
+
+  // Karte laden (Gelände, Kollisionen, Pickups, Spawns). Nur in der Lobby wechselbar.
+  loadMap(id) {
+    if (!MAP_IDS.includes(id)) id = 'frontier';
+    this.settings.map = id;
+    this.map = buildMap(true, id); this.map.parts = []; this.map.props = []; this.map.glows = []; this.map.lights = []; this.map.anims = []; this.map.labels = []; // nur Render-Daten, Server braucht sie nicht
     this.world = new World(this.map);
     this.nav = Nav.for(this.world);
     this.bots = new Bots(this);
@@ -39,9 +50,7 @@ export class Room {
     this.spawns = this.spawns.filter(s => s.y > -30 && this.nav.isWalk(s.x, s.z) || s.y < -6 || (s.y > 8 && s.y < 60)); // ungültige Spawns in Wänden raus
     this.surfaceSpawns = this.spawns.filter(s => this.nav.isWalk(s.x, s.z) && s.y > -3);
     this.zoneFx = this.map.zonesFx || [];
-    this.lastHistT = 0;
   }
-
   groundY(x, z) { const t = this.world.terrain(x, z); return Math.max(t, this.world.groundAt(x, z, t + 1.2)); }
   humans() { return [...this.members.values()].filter(m => m.connected); }
   send(m, o) { if (m.connected && m.client) m.client.send(o); }
@@ -51,7 +60,7 @@ export class Room {
   // =============== Lobby ===============
   addMember(client, profile) {
     const id = idc++;
-    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: profile.skin || 'vanguard', wskin: profile.wskin || 'default', level: profile.level | 0, userId: profile.userId || null, party: profile.party | 0, role: profile.role || 'PLAYER', muted: new Set(), lastChat: 0, chatBurst: 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
+    const m = { id, client, name: clean(profile.name, 14) || 'Spieler' + id, skin: SKINS.some(k => k.id === profile.skin) ? profile.skin : 'vanguard', wskin: WSKINS.some(k => k.id === profile.wskin) ? profile.wskin : 'default', back: profile.userId && BACKS.some(k => k.id === profile.back) ? profile.back : 'none', rp: profile.userId ? Math.max(0, profile.rp | 0) : 0, nc: NAME_COLORS.some(k => k.id === profile.nc) ? profile.nc : '', av: profile.av && AVATAR_BGS.some(k => k.id === profile.av.bg) && AVATAR_ICONS.some(k => k.id === profile.av.icon) ? { bg: profile.av.bg, icon: profile.av.icon } : null, level: profile.level | 0, userId: profile.userId || null, party: profile.party | 0, role: profile.role || 'PLAYER', muted: new Set(), lastChat: 0, chatBurst: 0, team: -1, connected: true, token: Math.random().toString(36).slice(2) + Date.now().toString(36), rtt: 0.08, ent: null, lastSeen: Date.now(), msgs: 0 };
     this.members.set(id, m);
     if (this.hostId == null || !this.members.get(this.hostId)?.connected) this.hostId = id;
     this.emptyAt = 0;
@@ -139,6 +148,7 @@ export class Room {
     if (s.timeLimit !== undefined) S.timeLimit = clamp(s.timeLimit | 0, 2, 20);
     if (s.tod && ['day', 'sunset', 'night', 'dynamic'].includes(s.tod)) S.tod = s.tod;
     if (s.fillBots !== undefined) S.fillBots = !!s.fillBots;
+    if (s.map && MAP_IDS.includes(s.map) && !S.ranked && s.map !== S.map) this.loadMap(s.map);
     this.lobbyUpdate();
   }
   setTeam(m, team, targetId) {
@@ -195,24 +205,25 @@ export class Room {
     }
     for (const e of this.ents.values()) this.spawnEnt(e, true);
     this.matchId = this.code + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    this.state = 'countdown'; this.startAt = this.T + (S.training ? 1.5 : 4);
+    this.vs = !S.training && humans.length >= 2 ? VS_SECS : 0;   // Gegner-Karte vor dem Countdown, wenn echte Spieler gegeneinander antreten
+    this.state = 'countdown'; this.startAt = this.T + (S.training ? 1.5 : 4 + this.vs);
     const limit = S.scoreLimit || mode.score; this.scoreLimit = limit; this.matchEnd = 0;
     this.nextSupply = this.startAt + 70; this.timeLimit = S.timeLimit * 60;
-    this.hour0 = { day: 13, sunset: 18.4, night: 23, dynamic: 8 + Math.random() * 10 }[S.tod] ?? 13;
+    this.hour0 = S.map === 'arena' ? ({ day: 18.9, sunset: 19.6, night: 23, dynamic: 18.5 + Math.random() * 5 }[S.tod] ?? 18.9) : ({ day: 13, sunset: 18.4, night: 23, dynamic: 8 + Math.random() * 10 }[S.tod] ?? 13);
     for (const m of humans) this.sendStart(m);
   }
   sendStart(m) {
     m.sent = null;
     const S = this.settings;
     this.send(m, {
-      k: 'start', you: m.ent ? m.ent.id : null, settings: S, T: this.T, startAt: this.startAt, hour0: this.hour0, scoreLimit: this.scoreLimit, timeLimit: this.timeLimit,
+      k: 'start', you: m.ent ? m.ent.id : null, settings: S, vs: this.vs || 0, T: this.T, startAt: this.startAt, hour0: this.hour0, scoreLimit: this.scoreLimit, timeLimit: this.timeLimit,
       ents: [...this.ents.values()].map(e => this.entInfo(e)), pickups: this.pickups.filter(p => !p.on).map(p => p.id), dyn: this.dyn.map(d => this.dynInfo(d)),
       doors: this.map.doors.map(d => [d.id, d.open ? 1 : 0, d.locked ? 1 : 0]), chests: [...this.chestState].filter(([, c]) => c.open).map(([id]) => id), switches: [...this.switchState].filter(([, s]) => s.on).map(([id]) => id),
       lowgrav: this.lowgravUntil, scores: this.scores(), state: this.state, shards: m.ent ? [...m.ent.shardSet] : [],
     });
     if (m.ent) this.sendInv(m.ent);
   }
-  entInfo(e) { return { id: e.id, name: e.name, skin: e.skin, wskin: e.wskin, team: e.team, bot: e.isBot ? 1 : 0, level: e.level, acct: e.member && e.member.userId ? 1 : 0, k: e.kills, d: e.deaths, sc: e.score, diff: e.diff }; }
+  entInfo(e) { return { id: e.id, name: e.name, skin: e.skin, wskin: e.wskin, back: e.back, rp: e.isBot ? 0 : e.rp, nc: e.nc, av: e.av, team: e.team, bot: e.isBot ? 1 : 0, level: e.level, acct: e.member && e.member.userId ? 1 : 0, k: e.kills, d: e.deaths, sc: e.score, diff: e.diff }; }
   lateJoin(m) {
     const mode = MODES[this.settings.mode];
     if (this.state === 'ended') { this.send(m, { k: 'err', text: 'Das Match ist gerade zu Ende.' }); }
@@ -237,7 +248,7 @@ export class Room {
   newEnt(o) {
     const id = o.bot ? 'b' + (this.nextId++) : 'p' + (o.member ? o.member.id : this.nextId++);
     const e = {
-      id, name: o.name, skin: o.skin, wskin: o.wskin || 'default', team: o.team ?? -1, isBot: !!o.bot, member: o.member || null, level: o.level | 0,
+      id, name: o.name, skin: o.skin, wskin: o.wskin || 'default', back: o.back || o.member?.back || 'none', rp: o.rp ?? o.member?.rp ?? 0, nc: o.member?.nc || '', av: o.member?.av || null, team: o.team ?? -1, isBot: !!o.bot, member: o.member || null, level: o.level | 0,
       x: 0, y: 0, z: 0, yaw: 0, pitch: 0, fl: 0, w: 'viper', vx: 0, vy: 0, vz: 0, hp: 100, shield: 0, alive: false, respawnAt: 0,
       kills: 0, deaths: 0, score: 0, streak: 0, best: 0, hs: 0, dmgDealt: 0, owned: [...START_LOADOUT], cons: { medkit: 1, shieldpot: 0, grenade: 1, smoke: 0 }, gadget: null, gadCd: {},
       lastFire: {}, power: {}, barrier: 0, barrierUntil: 0, spawnInv: 0, hist: [], shardSet: new Set(), chests: 0, lastUse: 0, crouch: false, reloadUntil: 0, lastSt: 0, rateViol: 0, beamAcc: {}, beamT: 0, dcInvuln: false, assists: {}, lastDmgFrom: null,
@@ -299,7 +310,7 @@ export class Room {
     if (this.state === 'countdown') return;
     if (e.mv?.tpAccepted) { e.mv.tpAccepted = false; d = 0; }
     e.vx = (x - e.x) / dt; e.vz = (z - e.z) / dt; e.vy = (y - e.y) / dt;
-    e.x = clamp(x, -196, 196); e.y = clamp(y, -60, 200); e.z = clamp(z, -196, 196);
+    const B = this.world.bound + 0.5; e.x = clamp(x, -B, B); e.y = clamp(y, -60, 200); e.z = clamp(z, -B, B);
     e.yaw = +s.yaw || 0; e.pitch = clamp(+s.pitch || 0, -1.6, 1.6);
     let fl = (s.fl | 0) & (FL.CROUCH | FL.SPRINT | FL.AIR | FL.DASH | FL.RELOAD | FL.AIM | FL.SHOOT | FL.GRAPPLE | FL.JET | FL.MELEE | FL.THROW);
     e.crouch = !!(fl & FL.CROUCH); e.clientFl = fl;
@@ -606,7 +617,7 @@ export class Room {
     if (this.hooks?.matchEnd && !this.settings.training) {
       const botsPresent = [...this.ents.values()].some(e => e.isBot);   // Ranked zählt nur in reinen Spieler-Matches
       const humans = [...this.ents.values()].filter(e => !e.isBot).length, secs = this.T - (this.matchStart || 0);
-      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: !!this.settings.ranked && !botsPresent }));
+      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, team: mode.teams ? e.team : -1, draw: !!mode.teams && winnerTeam < 0, secs, humans, ranked: !!this.settings.ranked && !botsPresent }));
       try { this.hooks.matchEnd(this, this.matchId, results); } catch (err) { console.error('[room] matchEnd-Hook', err); }
     }
   }
@@ -821,7 +832,7 @@ export class Room {
     // Verlauf für Lag-Compensation
     for (const e of this.ents.values()) { if (!e.alive) continue; e.hist.push({ t: T, x: e.x, y: e.y, z: e.z, h: this.entHeight(e) }); if (e.hist.length > 24) e.hist.shift(); }
     // Supply Drops
-    if (this.state === 'playing' && !this.settings.training && T >= this.nextSupply) { this.nextSupply = T + 85; this.supplyDrop(); }
+    if (this.state === 'playing' && !this.settings.training && !this.map.noSupply && T >= this.nextSupply) { this.nextSupply = T + 85; this.supplyDrop(); }
     for (let i = this.supplies.length - 1; i >= 0; i--) { const s = this.supplies[i]; if (T >= s.land) { this.supplyLand(s); this.supplies.splice(i, 1); } }
     // Uhr / Matchende
     if (this.state === 'playing' && !this.settings.training) {

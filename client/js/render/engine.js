@@ -34,16 +34,34 @@ export class Engine {
     this.M = createMaterials(this.renderer);
     progress(0.08, 'Karte generieren…');
     await new Promise(r => setTimeout(r, 20));
+    this.shared = {}; this.maps = {};
     this.map = buildMap();
     this.world = new World(this.map);
     this.sky = new Sky(this.scene, this.renderer);
-    this.view = new WorldView(this.scene, this.map, this.world, this.M, this.q);
+    this.view = new WorldView(this.scene, this.map, this.world, this.M, this.q, this.shared);
+    this.mapId = 'frontier'; this.maps.frontier = { map: this.map, world: this.world, view: this.view };
     await this.view.build((p, name) => progress(0.1 + p * 0.85, name));
     this.post = new Post(this.renderer, this.scene, this.camera);
     this.applyQuality(this.qname);
     window.addEventListener('resize', () => this.resize());
     this.setHour(15);
     progress(1, 'Bereit');
+  }
+
+  // Karte bei Bedarf bauen (die Weltkarte entsteht beim Start, die Arena erst wenn sie gebraucht wird) und als aktuelle anzeigen
+  ensureMap(id) {
+    if (this.maps[id]) return this.maps[id];
+    const map = buildMap(false, id), world = new World(map), view = new WorldView(this.scene, map, world, this.M, this.q, this.shared);
+    view.buildSync(); view.viewDist = this.view.viewDist; view.q.grassDist = this.q.grassDist; view.group.visible = false;
+    return (this.maps[id] = { map, world, view });
+  }
+  useMap(id) {
+    if (this.mapId === id && this.maps[id]) return false;
+    const m = this.ensureMap(id);
+    for (const [k, v] of Object.entries(this.maps)) v.view.group.visible = k === id;
+    this.mapId = id; this.map = m.map; this.world = m.world; this.view = m.view; this.view.setNight(this.sky.night);
+    if (this.view.lightPool.length) this.view.lightTimer = 0;
+    return true;
   }
 
   applyQuality(name, overrides = {}) {
@@ -62,7 +80,7 @@ export class Engine {
     this.q = q; this.renderScale = S ? S.renderScale || 1 : 1; this.partDensity = q.part;
     this.sky.setShadowQuality(q.shadow);
     this.post.setBloom(q.bloom, bat ? 0.3 : 0.42); this.post.setAO(q.ao);
-    this.view.q.grassDist = q.grassDist; this.view.viewDist = q.view;
+    for (const v of Object.values(this.maps)) { v.view.q.grassDist = q.grassDist; v.view.viewDist = q.view; }
     this.resize();
   }
   setDynScale(s) { this.dyn = s; this.resize(); }

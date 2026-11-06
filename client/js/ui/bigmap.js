@@ -14,11 +14,11 @@ export class BigMap {
     $('#bm-in').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { this.say($('#bm-in').value); $('#bm-in').value = ''; } else if (e.key === 'Escape' || (e.code === 'KeyM' && !$('#bm-in').value)) this.close(); });
   }
   teamMode() { return this.g.myTeam >= 0; }
-  myPlace() { const g = this.g, p = g.player; return placeName(p.x, p.z, p.y < g.world.terrain(p.x, p.z) - 3 && p.y < 4); }
+  myPlace() { const g = this.g, p = g.player; return placeName(p.x, p.z, p.y < g.world.terrain(p.x, p.z) - 3 && p.y < 4, g.map); }
   toggle() { this.open ? this.close() : this.show(); }
   show() {
     const g = this.g; if (!g.inMatch || g.matchEnded || !g.alive) return;
-    if (!this.base) this.base = Minimap.prototype.makeBase.call(null, g, 512);
+    if (!this.base || this.baseId !== g.map.id) { this.baseId = g.map.id; this.base = Minimap.prototype.makeBase.call(null, g, 512); }
     this.open = true; g.mapOpen = true; $('#bigmap').classList.add('show'); g.input.unlock(); this.sel = null; this.buildQuick(); this.loop();
   }
   close() {
@@ -27,10 +27,11 @@ export class BigMap {
   }
   loop() { if (!this.open) return; this.draw(); const now = performance.now(); if (now - this.last > 400) { this.last = now; this.team(); } requestAnimationFrame(() => this.loop()); }
   // Welt (x,z) ↔ Bild: Norden oben (−z), Karte −200…200
-  toPx(x, z) { const s = this.cv.width / 400; return [(x + 200) * s, (z + 200) * s]; }
+  pois() { return this.g.map.pois || POIS; }
+  toPx(x, z) { const E = this.g.map.extent || 200, s = this.cv.width / (2 * E); return [(x + E) * s, (z + E) * s]; }
   pick(e) {
     const r = this.cv.getBoundingClientRect(), k = this.cv.width / r.width, px = (e.clientX - r.left) * k, py = (e.clientY - r.top) * k; let best = null, bd = 34 * 34;
-    for (const p of POIS) { const [x, y] = this.toPx(p.x, p.z), d = (x - px) ** 2 + (y - py) ** 2; if (d < bd) { bd = d; best = p; } }
+    for (const p of this.pois()) { const [x, y] = this.toPx(p.x, p.z), d = (x - px) ** 2 + (y - py) ** 2; if (d < bd) { bd = d; best = p; } }
     this.sel = best === this.sel ? null : best; this.buildQuick();
   }
   say(text) { text = String(text || '').trim(); if (!text) return; if (!this.teamMode()) { this.g.ui.toast('Team-Nachrichten gibt es nur in Team-Modi.', 'bad'); return; } this.g.send({ k: 'chat', text, scope: 'team' }); }
@@ -45,16 +46,16 @@ export class BigMap {
     const mates = [...g.ents.values()].filter(e => !e.self && e.alive && this.teamMode() && e.info.team === g.myTeam);
     const add = (name, place, col) => { const r = document.createElement('div'); r.className = 'bm-m'; const d = document.createElement('i'); d.style.background = col; const n = document.createElement('b'); n.textContent = name; const p = document.createElement('small'); p.textContent = place; r.append(d, n, p); box.appendChild(r); };
     add('Du', this.myPlace(), '#ffffff');
-    for (const e of mates) add(e.info.name, placeName(e.pos.x, e.pos.z, e.pos.y < g.world.terrain(e.pos.x, e.pos.z) - 3 && e.pos.y < 4), TEAMS[e.info.team].color);
+    for (const e of mates) add(e.info.name, placeName(e.pos.x, e.pos.z, e.pos.y < g.world.terrain(e.pos.x, e.pos.z) - 3 && e.pos.y < 4, g.map), TEAMS[e.info.team].color);
     if (this.teamMode() && !mates.length) { const r = document.createElement('div'); r.className = 'bm-m'; r.textContent = 'Keine lebenden Teammates'; box.appendChild(r); }
   }
   draw() {
     const g = this.g, ctx = this.ctx, W = this.cv.width, p = g.player; ctx.clearRect(0, 0, W, W); ctx.fillStyle = '#08101e'; ctx.fillRect(0, 0, W, W);
     ctx.imageSmoothingEnabled = true; ctx.drawImage(this.base, 0, 0, W, W);
-    ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 1; for (let i = -150; i <= 150; i += 50) { const [a] = this.toPx(i, 0), [, b] = this.toPx(0, i); ctx.beginPath(); ctx.moveTo(a, 0); ctx.lineTo(a, W); ctx.moveTo(0, b); ctx.lineTo(W, b); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 1; const E = g.map.extent || 200, GS = E > 100 ? 50 : 10; for (let i = -Math.floor(E * 0.75 / GS) * GS; i <= E * 0.75; i += GS) { const [a] = this.toPx(i, 0), [, b] = this.toPx(0, i); ctx.beginPath(); ctx.moveTo(a, 0); ctx.lineTo(a, W); ctx.moveTo(0, b); ctx.lineTo(W, b); ctx.stroke(); }
     // Orte
     ctx.textAlign = 'center'; ctx.lineJoin = 'round';
-    for (const o of POIS) {
+    for (const o of this.pois()) {
       const [x, y] = this.toPx(o.x, o.z), sel = this.sel === o; ctx.font = (o.major ? '800 20px' : '700 13px') + ' "Trebuchet MS", Arial, sans-serif';
       if (!o.major) { ctx.fillStyle = sel ? '#ffd25a' : 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.arc(x, y, sel ? 5 : 3, 0, 6.3); ctx.fill(); }
       const txt = o.major ? o.n.toUpperCase() : o.n, ty = o.major ? y : y - 8; ctx.lineWidth = o.major ? 5 : 4; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(txt, x, ty); ctx.fillStyle = sel ? '#ffd25a' : (o.major ? '#ffffff' : '#cfe9ff'); ctx.fillText(txt, x, ty);

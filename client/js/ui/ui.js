@@ -1,6 +1,6 @@
 // Benutzeroberfläche: Menüs, Lobby, HUD, Ergebnis, Einstellungen, Skins, Erfolge.
-import { EMOTES, EMOTE_COOLDOWN, CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel, RARITY, SEASON_TIERS } from '../shared/defs.js';
-import { skinThumb, wskinThumb } from '../render/thumbs.js';
+import { EMOTES, EMOTE_COOLDOWN, CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, BACKS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel, RARITY, SEASON_TIERS } from '../shared/defs.js';
+import { skinThumb, wskinThumb, backThumb } from '../render/thumbs.js';
 import { Progress } from '../game/progress.js';
 import { audio } from '../game/audio.js';
 import { QUALITY } from '../render/engine.js';
@@ -11,14 +11,19 @@ import { resolveServerUrl } from '../game/net.js';
 import { Account } from '../game/account.js';
 import { Social } from '../game/social.js';
 import { BUILD } from '../version.js';
+import { installProfile, bindDrag } from './profileui.js';
+import { rankInfo } from '../shared/ranks.js';
+import { rankBadge } from './rankart.js';
+import { avatarHtml, nameHtml } from './cosmetic.js';
 
+const TIER_MIN = { Bronze: 0, Silver: 300, Gold: 600, Platinum: 900, Diamond: 1200, Master: 1500, Champion: 2000 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export class UI {
   constructor(game) {
-    this.g = game; this.stack = []; this.cur = null; this.soloSel = { mode: 'ffa', diff: 'normal', bots: 5, time: 6, tod: 'day' };
+    this.g = game; this.stack = []; this.cur = null; this.soloSel = { mode: 'ffa', diff: 'normal', bots: 5, time: 6, tod: 'day', map: 'frontier' };
     this.hud = new Hud(this, game); this.deadTimer = null; this.lastLobby = null; this.myId = null; this.chatOpen = false;
   }
   init() {
@@ -87,7 +92,8 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
-    if (name === 'profile') this.g.setMenuView('skins');
+    if (name === 'profile') this.g.setMenuView('profile');
+    if (name === 'ranks') this.openRanks();
     if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -111,7 +117,8 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
-    if (name === 'profile') this.g.setMenuView('skins');
+    if (name === 'profile') this.g.setMenuView('profile');
+    if (name === 'ranks') this.openRanks();
     if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -179,7 +186,7 @@ export class UI {
     const RANKC = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' };
     // Währungen & Werte oben rechts
     $('#cur-coins').textContent = u ? (u.stats.currency ?? 0).toLocaleString('de-DE') : '–';
-    const rk = s ? s.rank : '–', col = RANKC[rk] || '#8fa6c4'; $('#cur-rank-badge').textContent = rk.slice(0, 1); $('#cur-rank-badge').style.background = col; $('#cur-rank-v').textContent = s ? rk + ' · ' + s.rankPoints : 'kein Rang';
+    this.renderRankChips(s);
     $('#cur-season').textContent = se && se.enabled ? se.me.points : (u ? 0 : '–');
     $('#hm-name3d').textContent = u ? u.username : (d.name || 'Spieler');
     // Season-Karte
@@ -199,9 +206,8 @@ export class UI {
     $('#hb-info').textContent = se && se.me.position ? 'Du: Platz ' + se.me.position + ' · ' + pts + ' Punkte' : (se?.top?.length ? top.length + ' Spieler gewertet' : '');
     // Ranked-Karte
     const { modes, TEAM, size, mode } = this.homeMode(), on = !!d.settings.mmRanked, LBL = { ffa: 'FFA', tdm: 'TDM', duel: '1v1', v2: '2v2', v3: '3v3' };
-    const badge = $('#hr-badge'); badge.textContent = s ? s.rank.slice(0, 1) : '?'; badge.style.background = s ? col : '#c9a0a8';
     const sw = $('#hr-switch'); sw.setAttribute('aria-checked', on); $('#hr-state').textContent = on ? 'AN' : 'AUS';
-    $('#hr-sub').textContent = !u ? 'Mit Konto: Rang sammeln' : (s.rank + ' · ' + s.rankPoints + ' RP' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : '')) + (on ? ' – nur gegen echte Spieler' : ' – lockeres Spiel, keine Rangpunkte');
+    $('#hr-sub').textContent = !u ? 'Mit Konto: Rang sammeln' : (s.rankLabel + ' · ' + s.rankPoints + ' Wertung' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : '')) + (on ? ' – nur gegen echte Spieler' : ' – lockeres Spiel, keine Rangpunkte');
     const chips = $('#hr-chips'); chips.replaceChildren();
     for (const m of modes) { const c = document.createElement('button'); c.className = 'chip' + (m === mode ? ' on' : '') + (TEAM[m] && size > TEAM[m] ? ' locked' : ''); c.textContent = LBL[m]; c.title = MODES[m]?.name || m; c.onclick = () => { audio.click(); d.settings.mmMode = m; Progress.save(); this.renderHome(); }; chips.appendChild(c); }
     // Match finden
@@ -212,52 +218,6 @@ export class UI {
     else if (p && !p.isLeader) { t.textContent = 'Leiter sucht'; sub.textContent = 'Nur der Party-Leiter startet die Suche'; f.disabled = true; }
     else if (!Social.connected) { t.textContent = 'Verbinde …'; sub.textContent = 'Echtzeit-Dienst wird verbunden'; f.disabled = true; }
     else { t.textContent = 'Match finden'; sub.textContent = (on ? 'Ranked · ' : 'Locker · ') + (MODES[mode]?.name || mode) + (p ? ' · Party (' + size + ')' : ''); }
-  }
-
-  // ---------- Profil-Bildschirm ----------
-  async openProfile(name) {
-    this.profName = name || null; this.go('profile'); this.g.setMenuView('skins');
-    $('#pf-name').textContent = name || Account.user?.username || ''; $('#pf-stats').replaceChildren(); $('#pf-actions').replaceChildren();
-    let user, online = null, relation = null;
-    if (!name) { await Account.refresh(); try { await Account.loadInventory(); } catch { /* egal */ } user = Account.user; }
-    else { try { const r = await Account.profile(name); user = r.user; online = r.online; } catch (e) { this.toast(e.message, 'bad'); this.back(); return; } }
-    if (!user || this.cur !== 'profile') return;
-    const s = user.stats, self = !name, eq = self ? (Account.inv?.equipped || user.equipped) : user.equipped;
-    this.g.menuOverride = self ? null : { skin: eq?.skin || 'vanguard', wskin: eq?.wskin || 'default' }; this.g.refreshMenuChar();
-    const sk = SKINS.find(x => x.id === eq?.skin) || SKINS[0], ws = WSKINS.find(x => x.id === eq?.wskin) || WSKINS[0];
-    $('#pf-title').textContent = self ? 'Mein Profil' : 'Profil'; const av = $('#pf-av'); av.textContent = user.username.slice(0, 1).toUpperCase(); av.style.background = sk.armor; av.style.borderColor = sk.accent;
-    $('#pf-name').textContent = user.username; $('#pf-lvl').textContent = s.level;
-    const tags = $('#pf-tags'); tags.replaceChildren(); const tag = (t, on) => { const x = document.createElement('span'); x.textContent = t; if (on) x.className = 'on'; tags.appendChild(x); };
-    if (user.role !== 'PLAYER') tag(user.role); if (!self) tag(online ? 'online' : 'offline', online); else tag('du');
-    $('#pf-xp').style.width = (100 * s.xpInto / s.xpNeed) + '%'; $('#pf-xptxt').textContent = s.xpInto + ' / ' + s.xpNeed + ' XP bis Level ' + (s.level + 1);
-    // Rang
-    const COL = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' }, ranks = user.ranks || [], col = COL[s.rank] || '#fff';
-    const rb = $('#pf-rank'); rb.replaceChildren();
-    const badge = document.createElement('div'); badge.className = 'rk-badge'; badge.style.background = col; badge.textContent = s.rank.slice(0, 1);
-    const info = document.createElement('div'); info.className = 'rk-info'; const rn = document.createElement('b'); rn.textContent = s.rank; rn.style.color = col; const sm = document.createElement('small');
-    sm.textContent = s.rankPoints + ' Rangpunkte' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : ' · höchster Rang') + (s.bestRank !== s.rank ? ' · Bestwert: ' + s.bestRank : '');
-    const bar = document.createElement('div'); bar.className = 'rk-bar'; const bi = document.createElement('i'); bi.style.background = col; bi.style.width = (s.nextRankAt ? Math.max(3, 100 * (s.rankPoints - s.rankMin) / (s.nextRankAt - s.rankMin)) : 100) + '%'; bar.appendChild(bi);
-    const tiers = document.createElement('div'); tiers.className = 'rk-tiers'; for (const r of ranks) { const t = document.createElement('span'); t.textContent = r.name + ' ' + r.min; if (r.name === s.rank) { t.className = 'cur'; t.style.background = col; t.style.borderColor = col; } tiers.appendChild(t); }
-    info.append(rn, sm, bar, tiers); rb.append(badge, info); rb.title = 'Rangpunkte gibt es nur in Ranked-Matches (Spielen → Match suchen → Ranked AN) mit mindestens 2 echten Spielern: Sieg +25 bis +40, Niederlage bis −15.';
-    // Statistiken
-    const losses = Math.max(0, s.matches - s.wins), wr = s.matches ? Math.round(100 * s.wins / s.matches) + ' %' : '–', hs = s.kills ? Math.round(100 * s.headshots / s.kills) + ' %' : '–';
-    const grid = $('#pf-stats'); grid.replaceChildren();
-    for (const [v, l, big] of [[s.kd, 'K/D', 1], [wr, 'Siegquote', 1], [s.matches, 'Matches', 1], [s.wins, 'Siege'], [losses, 'Niederlagen'], [s.kills, 'Kills'], [s.deaths, 'Tode'], [s.headshots, 'Kopftreffer'], [hs, 'HS-Quote']]) { const c = document.createElement('div'); c.className = 'pf-st' + (big ? ' big' : ''); const b = document.createElement('b'); b.textContent = v; const sg = document.createElement('small'); sg.textContent = l; c.append(b, sg); grid.appendChild(c); }
-    const gear = $('#pf-gear'); gear.replaceChildren();
-    const gearCard = (label, def, thumb) => { const d = document.createElement('div'); d.className = 'gr r-' + def.rarity; d.style.setProperty('--rc', RARITY[def.rarity].color); const im = document.createElement('div'); im.className = 'gr-img'; try { const i = new Image(); i.src = thumb(); i.draggable = false; im.appendChild(i); } catch { /* ohne Bild */ } const t = document.createElement('div'); t.className = 'gr-t'; t.innerHTML = '<small>' + label + '</small><b>' + esc(def.name) + '</b><em>' + RARITY[def.rarity].name + '</em>'; d.append(im, t); gear.appendChild(d); };
-    gearCard('Charakter', sk, () => skinThumb(sk.id)); gearCard('Waffen-Skin', ws, () => wskinThumb(ws.id));
-    if (self) { try { const se = await Account.season(); if (se.enabled && this.cur === 'profile') { const d = document.createElement('div'); d.className = 'gr gr-se'; d.innerHTML = '<div class="gr-t"><small>Season</small><b>' + se.me.points.toLocaleString('de-DE') + ' Punkte</b><em>' + (se.me.position ? 'Platz ' + se.me.position : 'noch nicht platziert') + '</em></div>'; d.onclick = () => { audio.click(); this.go('season'); }; gear.appendChild(d); } } catch { /* optional */ } }
-    $('#pf-since').textContent = 'Konto seit ' + new Date(user.createdAt).toLocaleDateString('de-DE');
-    // Aktionen bei fremden Profilen
-    const act = $('#pf-actions'); act.replaceChildren();
-    if (!self && Account.user) {
-      try { const fr = await Account.friends(); relation = fr.friends.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'friend' : fr.outgoing.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'out' : fr.incoming.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'in' : 'none'; } catch { relation = null; }
-      const btn = (t, f, primary) => { const b = document.createElement('button'); b.className = 'btn small' + (primary ? ' primary' : ''); b.textContent = t; b.onclick = async () => { b.disabled = true; try { await f(); } catch (e) { this.toast(e.message || 'Fehler', 'bad'); } b.disabled = false; }; act.appendChild(b); };
-      if (relation === 'none') btn('Freund hinzufügen', async () => { await Account.friendAction('request', user.username); this.toast('Anfrage gesendet', 'good'); this.openProfile(name); }, true);
-      else if (relation === 'in') btn('Anfrage annehmen', async () => { await Account.friendAction('accept', user.username); this.toast(user.username + ' ist jetzt dein Freund!', 'good'); this.openProfile(name); }, true);
-      else if (relation === 'out') { const t = document.createElement('small'); t.className = 'pf-sm'; t.textContent = 'Freundschaftsanfrage gesendet …'; act.appendChild(t); }
-      else if (relation === 'friend' && online && (!this._party || this._party.isLeader)) btn('Party einladen', () => this.inviteFriend(user.username), true);
-    }
   }
 
   // ---------- Eigene Dialoge (statt confirm()/prompt() des Browsers) ----------
@@ -471,27 +431,25 @@ export class UI {
   }
   async refreshBoard() {
     const kind = this.lbKind; let d; try { d = await Account.leaderboard(kind); } catch (e) { this.toast(e.message, 'bad'); return; } if (this.cur !== 'board' || kind !== this.lbKind) return;
-    const RC = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' }, me = Account.user.username;
-    $('#lb-sub').textContent = kind === 'season' ? d.season.name + ' · Top 50' : 'Rangpunkte · Top 50';
-    const av = (r) => { const a = document.createElement('div'); a.className = 'lb-av'; a.textContent = r.name.slice(0, 1).toUpperCase(); a.style.background = RC[r.rank] || '#3b7ddd'; return a; };
-    const open = (r) => { audio.click(); r.name === me ? this.openProfile(null) : this.openProfile(r.name); };
+    const me = Account.user.username, open = (r) => { audio.click(); r.name === me ? this.openProfile(null) : this.openProfile(r.name); };
+    $('#lb-sub').textContent = kind === 'season' ? d.season.name + ' · Top 50' : 'Wertung (ELO) · Top 50';
+    const av = (r, s) => avatarHtml({ bg: r.av?.bg, icon: r.av?.icon }, r.av?.skin, s), rk = (r, s, anim) => rankBadge(rankInfo(rankPts(r)), { size: s, anim });
+    const rankPts = (r) => TIER_MIN[r.rank] + Math.max(0, (r.rankDiv || 1) - 1) * 100;
     const pod = $('#lb-podium'); pod.replaceChildren(); const rows = d.rows;
-    if (!rows.length) { pod.innerHTML = '<div class="empty">Noch niemand gewertet – ' + (kind === 'season' ? 'spiele ein Match, um dich zu platzieren!' : 'gewinne Ranked-Matches, um Rangpunkte zu sammeln!') + '</div>'; }
+    if (!rows.length) { pod.innerHTML = '<div class="empty">Noch niemand gewertet – ' + (kind === 'season' ? 'spiele ein Match, um dich zu platzieren!' : 'gewinne Ranked-Matches, um Wertung zu sammeln!') + '</div>'; }
     for (const [i, cls] of [[1, 'p2'], [0, 'p1'], [2, 'p3']]) {
       const r = rows[i]; const c = document.createElement('div'); c.className = 'pd ' + cls + (r ? '' : ' empty');
-      if (r) { const a = av(r); const crown = i === 0 ? '<i class="pd-crown">♛</i>' : ''; c.append(a); c.insertAdjacentHTML('afterbegin', crown); c.insertAdjacentHTML('beforeend', '<b class="pd-name">' + esc(r.name) + '</b><span class="pd-pts">' + r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small></span><em class="pd-rank" style="color:' + (RC[r.rank] || '#fff') + '">' + r.rank + ' · Lv ' + r.level + '</em>'); c.onclick = () => open(r); if (r.name === me) c.classList.add('me'); }
+      if (r) { const crown = i === 0 ? '<i class="pd-crown">♛</i>' : ''; c.insertAdjacentHTML('beforeend', crown + '<div class="pd-av">' + av(r, i === 0 ? 76 : 62) + '<span class="pd-rk">' + rk(r, i === 0 ? 46 : 38, i === 0) + '</span></div><b class="pd-name">' + nameHtml(r.name, r.nc, r.rankKey || (r.rank || '').toLowerCase()) + '</b><span class="pd-pts">' + r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small></span><em class="pd-rank">' + r.rankLabel + ' · Lv ' + r.level + '</em>'); c.onclick = () => open(r); if (r.name === me) c.classList.add('me'); }
       c.insertAdjacentHTML('beforeend', '<div class="pd-block"><span>' + (i + 1) + '</span></div>'); pod.appendChild(c);
     }
     const list = $('#lb-list'); list.replaceChildren();
     for (const r of rows.slice(3)) {
       const row = document.createElement('div'); row.className = 'lb-row' + (r.name === me ? ' me' : ''); row.title = 'Profil ansehen'; row.onclick = () => open(r);
-      const p = document.createElement('span'); p.className = 'lb-pos'; p.textContent = r.pos; const n = document.createElement('div'); n.className = 'lb-n'; n.innerHTML = '<b>' + esc(r.name) + '</b><small>Level ' + r.level + ' · ' + r.wins + ' Siege</small>';
-      const rk = document.createElement('span'); rk.className = 'lb-rk'; rk.textContent = r.rank; rk.style.color = RC[r.rank] || '#fff'; rk.style.borderColor = RC[r.rank] || '#fff';
-      const pt = document.createElement('span'); pt.className = 'lb-pt'; pt.innerHTML = r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small>';
-      row.append(p, av(r), n, rk, pt); list.appendChild(row);
+      row.innerHTML = '<span class="lb-pos">' + r.pos + '</span>' + av(r, 40) + '<div class="lb-n"><b>' + nameHtml(r.name, r.nc, (r.rank || '').toLowerCase()) + '</b><small>Level ' + r.level + ' · ' + r.wins + ' Siege</small></div><span class="lb-rk">' + rk(r, 32, false) + '<em>' + r.rankLabel + '</em></span><span class="lb-pt">' + r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small></span>';
+      list.appendChild(row);
     }
     const m = $('#lb-me'); const inTop = rows.some(r => r.name === me);
-    m.innerHTML = d.me.position ? '<span>DEINE PLATZIERUNG</span><b>#' + d.me.position + '</b><em>' + d.me.points.toLocaleString('de-DE') + ' ' + d.unit + (inTop ? '' : ' · außerhalb der Top 50') + '</em>' : '<span>DEINE PLATZIERUNG</span><em>' + (kind === 'season' ? 'Noch keine Punkte – spiele ein Match!' : 'Noch keine Rangpunkte – spiele Ranked!') + '</em>';
+    m.innerHTML = d.me.position ? '<span>DEINE PLATZIERUNG</span><b>#' + d.me.position + '</b><em>' + d.me.points.toLocaleString('de-DE') + ' ' + d.unit + (kind === 'rank' ? ' · ' + d.me.rankLabel : '') + (inTop ? '' : ' · außerhalb der Top 50') + '</em>' : '<span>DEINE PLATZIERUNG</span><em>' + (kind === 'season' ? 'Noch keine Punkte – spiele ein Match!' : 'Noch nicht platziert – spiele Ranked!') + '</em>';
   }
 
   // ---------- Freunde ----------
@@ -554,7 +512,7 @@ export class UI {
   }
   showReward(m, old) {
     const s = Account.user.stats, box = $('#res-xp'); if (!box) return;
-    box.innerHTML = `<div class="big">+${m.xp} XP</div><div class="lvl">Level ${s.level}${s.level > old.level ? ' – LEVEL UP!' : ''} · Rang ${s.rank}${m.rankDelta ? ' (' + (m.rankDelta > 0 ? '+' : '') + m.rankDelta + ' RP)' : ''} · +${m.coins} Münzen</div><div class="xb"><i style="width:${100 * s.xpInto / s.xpNeed}%"></i></div>${m.seasonPoints ? `<div class="lvl">+${m.seasonPoints} Saisonpunkte (gesamt ${m.seasonTotal})</div>` : ''}`;
+    box.innerHTML = `<div class="big">+${m.xp} XP</div><div class="lvl">Level ${s.level}${s.level > old.level ? ' – LEVEL UP!' : ''} · +${m.coins} Münzen</div>${m.ranked ? `<div class="res-rank ${m.rankUp ? 'up' : m.rankDown ? 'down' : ''}">${rankBadge(rankInfo(m.rankPoints), { size: 46, anim: true })}<div><b>${m.rankLabel}</b><span>${m.rankDelta > 0 ? '+' : ''}${m.rankDelta} Wertung · ${m.rankPoints.toLocaleString('de-DE')}</span>${m.rankUp ? '<em>▲ RANG AUFGESTIEGEN</em>' : m.rankDown ? '<em>▼ Rang verloren</em>' : ''}${m.placement ? '<small>Platzierung: noch ' + m.placement + ' Match' + (m.placement > 1 ? 'es' : '') + '</small>' : ''}</div></div>` : ''}<div class="xb"><i style="width:${100 * s.xpInto / s.xpNeed}%"></i></div>${m.seasonPoints ? `<div class="lvl">+${m.seasonPoints} Saisonpunkte (gesamt ${m.seasonTotal})</div>` : ''}`;
     if (s.level > old.level) { this.levelUp(s.level); audio.levelUp(); }
   }
   // ---------- Solo / Training ----------
@@ -562,21 +520,21 @@ export class UI {
     const holder = $('#solo-modes'); holder.innerHTML = '';
     for (const [id, m] of Object.entries(MODES)) { const c = document.createElement('div'); c.className = 'card'; c.dataset.id = id; c.innerHTML = `<b>${m.name}</b><span>${m.desc}</span>`; c.onclick = () => { audio.click(); this.soloSel.mode = id; this.refreshSolo(); }; holder.appendChild(c); }
     const seg = (sel, key, num) => $$(sel + ' button').forEach(b => b.onclick = () => { audio.click(); this.soloSel[key] = num ? +b.dataset.v : b.dataset.v; this.refreshSolo(); });
-    seg('#solo-diff', 'diff'); seg('#solo-time', 'time', true); seg('#solo-tod', 'tod');
+    seg('#solo-diff', 'diff'); seg('#solo-time', 'time', true); seg('#solo-tod', 'tod'); seg('#solo-map', 'map');
     $('#solo-bots').oninput = (e) => { this.soloSel.bots = +e.target.value; this.refreshSolo(); };
     $('#solo-start').onclick = () => { audio.click(); this.ensureName(() => this.startSolo()) && this.startSolo(); };
   }
   refreshSolo() {
     const s = this.soloSel;
     $$('#solo-modes .card').forEach(c => c.classList.toggle('on', c.dataset.id === s.mode));
-    $$('#solo-diff button').forEach(b => b.classList.toggle('on', b.dataset.v === s.diff)); $$('#solo-time button').forEach(b => b.classList.toggle('on', +b.dataset.v === s.time)); $$('#solo-tod button').forEach(b => b.classList.toggle('on', b.dataset.v === s.tod));
+    $$('#solo-diff button').forEach(b => b.classList.toggle('on', b.dataset.v === s.diff)); $$('#solo-time button').forEach(b => b.classList.toggle('on', +b.dataset.v === s.time)); $('#solo-tod button').forEach(b => b.classList.toggle('on', b.dataset.v === s.tod)); $('#solo-map button').forEach(b => b.classList.toggle('on', b.dataset.v === (s.map || 'frontier')));
     const fixed = MODES[s.mode].size > 0; $('#solo-bots').disabled = fixed; $('#solo-bots').value = s.bots; $('#solo-bots-v').textContent = fixed ? 'auto' : s.bots;
   }
   async startSolo() {
     const s = this.soloSel;
     try { await this.g.connect(true); } catch (e) { this.toast('Start fehlgeschlagen', 'bad'); return; }
     this.g.net.on('joined', () => this.g.net.send({ k: 'start' }));
-    this.g.net.send({ k: 'create', settings: { mode: s.mode, bots: s.bots, diff: s.diff, timeLimit: s.time, tod: s.tod, fillBots: true } });
+    this.g.net.send({ k: 'create', settings: { mode: s.mode, bots: s.bots, diff: s.diff, timeLimit: s.time, tod: s.tod, fillBots: true, map: s.map || 'frontier' } });
   }
   async startTraining() {
     if (!this.ensureName(() => this.startTraining())) return;
@@ -632,7 +590,7 @@ export class UI {
     const m = $('#lobby-modes'); m.innerHTML = '';
     for (const [id, mode] of Object.entries(MODES)) { const c = document.createElement('div'); c.className = 'card'; c.dataset.id = id; c.innerHTML = `<b>${mode.name}</b><span>${mode.desc}</span>`; c.onclick = () => { if (host()) { audio.click(); g.send({ k: 'set', s: { mode: id } }); } }; m.appendChild(c); }
     const seg = (sel, key, num) => $$(sel + ' button').forEach(b => b.onclick = () => { if (host()) { audio.click(); g.send({ k: 'set', s: { [key]: num ? +b.dataset.v : b.dataset.v } }); } });
-    seg('#lb-diff', 'diff'); seg('#lb-time', 'timeLimit', true); seg('#lb-score', 'scoreLimit', true); seg('#lb-tod', 'tod');
+    seg('#lb-diff', 'diff'); seg('#lb-time', 'timeLimit', true); seg('#lb-score', 'scoreLimit', true); seg('#lb-tod', 'tod'); seg('#lb-map', 'map');
     $('#lb-bots').oninput = (e) => { if (host()) g.send({ k: 'set', s: { bots: +e.target.value } }); };
     $('#lb-fill').onchange = (e) => { if (host()) g.send({ k: 'set', s: { fillBots: e.target.checked } }); };
   }
@@ -643,8 +601,8 @@ export class UI {
     $('#lobby-count').textContent = `(${d.members.length})`;
     $$('#lobby-modes .card').forEach(c => c.classList.toggle('on', c.dataset.id === S.mode)); $('#lobby-modes').classList.toggle('locked', !host);
     const mark = (sel, v) => $$(sel + ' button').forEach(b => b.classList.toggle('on', b.dataset.v == v));
-    mark('#lb-diff', S.diff); mark('#lb-time', S.timeLimit); mark('#lb-score', S.scoreLimit); mark('#lb-tod', S.tod);
-    for (const id of ['#lb-diff', '#lb-time', '#lb-score', '#lb-tod']) $(id).classList.toggle('locked', !host);
+    mark('#lb-diff', S.diff); mark('#lb-time', S.timeLimit); mark('#lb-score', S.scoreLimit); mark('#lb-tod', S.tod); mark('#lb-map', S.map || 'frontier');
+    for (const id of ['#lb-diff', '#lb-time', '#lb-score', '#lb-tod', '#lb-map']) $(id).classList.toggle('locked', !host);
     $('#lb-bots').value = S.bots; $('#lb-bots-v').textContent = mode.size ? 'auto' : S.bots; $('#lb-bots').disabled = !host || mode.size > 0; $('#lb-fill').checked = S.fillBots; $('#lb-fill').disabled = !host || !mode.size;
     $('#lobby-hostnote').textContent = d.auto ? '(Matchmaking – automatisch)' : host ? '(du bist Host)' : '(nur der Host ändert Einstellungen)';
     $('#lobby-start').style.display = host ? '' : 'none'; $('#lobby-shuffle').style.display = host && mode.teams ? '' : 'none';
@@ -700,43 +658,40 @@ export class UI {
 
   // ---------- Garderobe / Skin-Shop ----------
   buildSkins() {
-    this.shop = { tab: 'skin', sel: { skin: null, wskin: null } };
+    this.shop = { tab: 'skin', sel: { skin: null, wskin: null, back: null } };
     const wsel = $('#skin-weapon'); wsel.innerHTML = '';
     for (const id of ['striker', 'viper', 'hornet', 'breaker', 'marksman', 'longshot', 'stormcaller', 'pulse', 'lancer', 'blade', 'magnum']) { const b = document.createElement('button'); b.textContent = WEAPONS[id].name; b.dataset.v = id; b.onclick = () => { audio.click(); Progress.d.menuWeapon = id; Progress.save(); this.applyPreview(); this.refreshSkins(true); }; wsel.appendChild(b); }
     $$('#shop-tabs button').forEach(b => b.onclick = () => { audio.click(); this.shop.tab = b.dataset.tab; this.applyPreview(); this.refreshSkins(); });
     // 360°-Ansicht: Ziehen dreht (und kippt), Mausrad zoomt, nach 2,5 s ohne Eingabe dreht sich die Vorschau von selbst weiter
-    const st = $('#shop-stage'); let drag = null; const g = this.g, idle = () => { g.menuIdleAt = performance.now() / 1000 + 2.5; };
-    st.addEventListener('pointerdown', (e) => { if (e.target.closest('button, .shop-buy, .shop-info')) return; drag = { x: e.clientX, y: e.clientY }; try { st.setPointerCapture(e.pointerId); } catch { /* egal */ } st.classList.add('drag'); idle(); });
-    st.addEventListener('pointermove', (e) => { if (!drag) return; g.menuYaw -= (e.clientX - drag.x) * 0.009; g.menuPitch = Math.max(-0.3, Math.min(0.6, g.menuPitch + (e.clientY - drag.y) * 0.004)); drag.x = e.clientX; drag.y = e.clientY; idle(); });
-    for (const t of ['pointerup', 'pointercancel']) st.addEventListener(t, () => { drag = null; st.classList.remove('drag'); idle(); });
-    st.addEventListener('wheel', (e) => { g.menuZoom = Math.max(0.5, Math.min(1.5, g.menuZoom * (1 + Math.sign(e.deltaY) * 0.08))); idle(); }, { passive: true });
+    bindDrag($('#shop-stage'), this.g); bindDrag($('#pp-stage'), this.g);
   }
   openShop() {
-    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin };
-    this.shop.sel = { skin: eq.skin, wskin: eq.wskin }; this.shop.tab = 'skin'; this.applyPreview(); this.refreshSkins();
+    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin, back: 'none' };
+    this.shop.sel = { skin: eq.skin, wskin: eq.wskin, back: eq.back || 'none' }; this.shop.tab = 'skin'; this.applyPreview(); this.refreshSkins();
   }
   // Skin-Vorschau im 3D-Raum aktualisieren (ohne etwas auszurüsten)
   applyPreview() {
-    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin }, sh = this.shop;
-    this.g.setSkinPreview({ type: sh.tab, skin: sh.tab === 'skin' ? sh.sel.skin : eq.skin, wskin: sh.tab === 'wskin' ? sh.sel.wskin : eq.wskin, weapon: Progress.d.menuWeapon || 'striker' });
+    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin, back: 'none' }, sh = this.shop;
+    if (sh.tab === 'back' && this._lastTab !== 'back') { this.g.menuYaw = Math.PI + 0.45; this.g.menuIdleAt = performance.now() / 1000 + 2.5; } else if (sh.tab !== 'back' && this._lastTab === 'back') this.g.menuYaw = 0.5; this._lastTab = sh.tab;
+    this.g.setSkinPreview({ type: sh.tab, skin: sh.tab === 'skin' ? sh.sel.skin : eq.skin, wskin: sh.tab === 'wskin' ? sh.sel.wskin : eq.wskin, back: sh.tab === 'back' ? sh.sel.back : (eq.back || 'none'), weapon: Progress.d.menuWeapon || 'striker' });
   }
   shopStatus(type, s) {
     const inv = Account.user ? Account.inv : null, id = type + ':' + s.id, it = CATALOG_BY_ID[id], d = Progress.d;
-    const owned = inv ? inv.owned.includes(id) : (type === 'skin' ? Progress.skinUnlocked(s.id) : Progress.wskinUnlocked(s.id));
-    const eq = inv ? inv.equipped[type] : d[type];
+    const owned = inv ? inv.owned.includes(id) : (type === 'skin' ? Progress.skinUnlocked(s.id) : type === 'wskin' ? Progress.wskinUnlocked(s.id) : s.id === 'none');
+    const eq = inv ? inv.equipped[type] : (d[type] || (type === 'back' ? 'none' : null));
     return { owned, equipped: owned && eq === s.id, price: it.price, coins: inv ? inv.coins : 0, logged: !!inv, level: s.level, id };
   }
   async shopAct(type, s) {
     const st = this.shopStatus(type, s), inv = Account.user ? Account.inv : null, d = Progress.d;
     if (st.equipped) return;
-    if (st.owned) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.g.syncWeaponShow(); this.toast(s.name + ' ausgerüstet', 'good'); this.refreshSkins(); return; }
+    if (st.owned) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null, type === 'back' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.g.syncWeaponShow(); this.toast(s.name + ' ausgerüstet', 'good'); this.refreshSkins(); return; }
     if (!st.logged) { audio.error(); this.go('login'); return; }
     if (st.coins < st.price) { audio.error(); this.toast('Dir fehlen noch ' + (st.price - st.coins) + ' Münzen für ' + s.name + '.', 'bad'); return; }
-    if (!(await this.confirm({ title: 'Kauf bestätigen', lines: [{ cls: 'dl-big', text: s.name }, RARITY[s.rarity].name + ' · ' + (type === 'skin' ? 'Charakter-Skin' : 'Waffen-Skin'), 'Preis: ' + st.price + ' Münzen', { cls: '', text: 'Danach hast du ' + (st.coins - st.price) + ' Münzen übrig.' }], ok: 'Kaufen · ' + st.price + ' Münzen' }))) return;
+    if (!(await this.confirm({ title: 'Kauf bestätigen', lines: [{ cls: 'dl-big', text: s.name }, RARITY[s.rarity].name + ' · ' + (type === 'skin' ? 'Charakter-Skin' : type === 'wskin' ? 'Waffen-Skin' : 'Rückenstück'), 'Preis: ' + st.price + ' Münzen', { cls: '', text: 'Danach hast du ' + (st.coins - st.price) + ' Münzen übrig.' }], ok: 'Kaufen · ' + st.price + ' Münzen' }))) return;
     try { await Account.buy(st.id); audio.levelUp(); this.toast(s.name + ' gekauft!', 'good'); this.refreshProfile(); this.refreshSkins(); } catch (e) { audio.error(); this.toast(e.message, 'bad'); }
   }
   refreshSkins(keep) {
-    const sh = this.shop, type = sh.tab, list = type === 'skin' ? SKINS : WSKINS, grid = $('#shop-grid'), inv = Account.user ? Account.inv : null;
+    const sh = this.shop, type = sh.tab, list = type === 'skin' ? SKINS : type === 'wskin' ? WSKINS : BACKS, grid = $('#shop-grid'), inv = Account.user ? Account.inv : null;
     $$('#shop-tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === type)); $$('#skin-weapon button').forEach(b => b.classList.toggle('on', b.dataset.v === (Progress.d.menuWeapon || 'striker')));
     $('#shop-coins').innerHTML = inv ? '<i class="cn"></i><b>' + inv.coins.toLocaleString('de-DE') + '</b>' : '<button class="link" id="shop-login">Anmelden zum Kaufen</button>'; const lg = $('#shop-login'); if (lg) lg.onclick = () => { audio.click(); this.go('login'); };
     if (!sh.sel[type]) sh.sel[type] = list[0].id;
@@ -753,13 +708,13 @@ export class UI {
         c.append(img, tag, nm, sm); c.onclick = () => { audio.click(); sh.sel[type] = s.id; this.applyPreview(); $$('.sc', grid).forEach(x => x.classList.toggle('sel', x === c)); this.refreshSkins(true); }; grid.appendChild(c); imgs.push([img, s]);
       }
       // Vorschaubilder nach und nach rendern, damit das Öffnen nicht ruckelt
-      let i = 0; const next = () => { if (this.cur !== 'skins' || i >= imgs.length || this.shop.tab !== type) return; const [el, s] = imgs[i++]; try { const im = new Image(); im.src = type === 'skin' ? skinThumb(s.id) : wskinThumb(s.id); im.draggable = false; el.appendChild(im); } catch (e) { console.warn('Vorschaubild', e); } setTimeout(next, 0); }; next();
+      let i = 0; const next = () => { if (this.cur !== 'skins' || i >= imgs.length || this.shop.tab !== type) return; const [el, s] = imgs[i++]; try { const im = new Image(); im.src = type === 'skin' ? skinThumb(s.id) : type === 'wskin' ? wskinThumb(s.id) : backThumb(s.id); im.draggable = false; el.appendChild(im); } catch (e) { console.warn('Vorschaubild', e); } setTimeout(next, 0); }; next();
     }
     // Info + Kaufknopf
     const st = this.shopStatus(type, sel), r = RARITY[sel.rarity];
-    const EXTRA = { wings: 'Flügel', rays: 'Strahlenkranz', crystals: 'Eiskristalle', vents: 'Glühkern', spikes: 'Schulterdornen', leaves: 'Blätter', katana: 'Katana', cape: 'Umhang', ribbons: 'Lichtbänder', halo2: 'Doppel-Halo', crown: 'Flammenkrone', orbit: 'Kreisende Fragmente', aura: 'Boden-Aura', hue: 'Farbwechsel', pulse: 'Pulsierendes Glühen', strip: 'Leuchtstreifen', core: 'Energiekern', ring: 'Mündungsringe', shimmer: 'Schimmer' };
+    const EXTRA = { wings: 'Flügel', rays: 'Strahlenkranz', crystals: 'Eiskristalle', vents: 'Glühkern', spikes: 'Schulterdornen', leaves: 'Blätter', katana: 'Katana', cape: 'Umhang', ribbons: 'Lichtbänder', halo2: 'Doppel-Halo', crown: 'Flammenkrone', orbit: 'Kreisende Fragmente', aura: 'Boden-Aura', hue: 'Farbwechsel', pulse: 'Pulsierendes Glühen', strip: 'Leuchtstreifen', core: 'Energiekern', ring: 'Mündungsringe', shimmer: 'Schimmer', pocket: 'Taschen', scope: 'Zielfernrohr', flame: 'Düsenflamme', sway: 'Wiegt sich', float: 'Schwebt', spin: 'Rotiert', wings: 'Flügel', flap: 'Flügelschlag', embers: 'Aufsteigende Glut', portal: 'Portal', hue: 'Farbwechsel' };
     const fx = (type === 'skin' ? sel.extras : sel.fx) || [];
-    const blurb = type === 'skin' ? sel.blurb : ({ default: 'Das klassische Finish.', carbon: 'Mattes Carbon mit mintgrünem Leuchten.', gold: 'Echtes Gold – spiegelnd und schwer. Auch über die Goldene Ente erhältlich.', neon: 'Dunkles Metall mit pinkem Neon-Raster.', toxic: 'Giftgrünes Leuchten auf dunklem Lauf.', magma: 'Glühende Lava unter schwarzer Kruste.', frost: 'Eisweiß mit kaltem Blau.', void: 'Verschluckt das Licht – nur violette Kanten leuchten.', dragon: 'Drachenrot mit goldenem Schimmer.', prism: 'Perlweiß mit wanderndem Regenbogen-Leuchten.' }[sel.id] || '');
+    const blurb = (type === 'skin' || type === 'back') ? sel.blurb : ({ default: 'Das klassische Finish.', carbon: 'Mattes Carbon mit mintgrünem Leuchten.', gold: 'Echtes Gold – spiegelnd und schwer. Auch über die Goldene Ente erhältlich.', neon: 'Dunkles Metall mit pinkem Neon-Raster.', toxic: 'Giftgrünes Leuchten auf dunklem Lauf.', magma: 'Glühende Lava unter schwarzer Kruste.', frost: 'Eisweiß mit kaltem Blau.', void: 'Verschluckt das Licht – nur violette Kanten leuchten.', dragon: 'Drachenrot mit goldenem Schimmer.', prism: 'Perlweiß mit wanderndem Regenbogen-Leuchten.' }[sel.id] || '');
     $('#shop-info').innerHTML = '<div class="si-rar" style="--rc:' + r.color + '"><i></i>' + r.name + '</div><h3>' + esc(sel.name) + '</h3><p>' + esc(blurb) + '</p>' + (fx.length ? '<div class="si-fx">' + fx.map(x => '<span>' + (EXTRA[x] || x) + '</span>').join('') + '</div>' : '') + '<div class="si-meta"><span>Level <b>' + sel.level + '</b></span>' + (st.logged && !st.owned ? '<span>Preis <b>' + st.price + '</b></span>' : '') + '</div>';
     $('#shop-stage').classList.toggle('wmode', type === 'wskin'); $('#shop-info').style.setProperty('--rc', r.color); $('#shop-stage').style.setProperty('--rc', r.color);
     const btn = $('#shop-btn'), note = $('#shop-note'); btn.disabled = false; btn.removeAttribute('aria-disabled');
@@ -796,7 +751,7 @@ export class UI {
   pause(show) { $('#pause').classList.toggle('show', show && this.g.mode === 'play' && !this.g.matchEnded); $('#clickhint').classList.remove('show'); }
 
   // ---------- HUD-Hooks ----------
-  beginMatch(m, g) { this.hud.begin(m, g); $('#results').classList.remove('show'); $('#death').classList.remove('on'); $('#feed').innerHTML = ''; this.stack = []; }
+  beginMatch(m, g) { this.showVS(m, g); this.hud.begin(m, g); $('#results').classList.remove('show'); $('#death').classList.remove('on'); $('#feed').innerHTML = ''; this.stack = []; }
   resetFeed() { $('#feed').innerHTML = ''; }
   countdown(t) { const el = $('#countdown'); el.textContent = t; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); }
   banner(t, kind = '') { const el = $('#banner'); el.textContent = t; el.className = 'h-banner ' + kind; void el.offsetWidth; el.classList.add('on'); }
@@ -907,3 +862,4 @@ class Hud {
     const zn = g.zoneName(); if (zn !== L.zone) { L.zone = zn; $('#h-zone').textContent = zn; }
   }
 }
+installProfile(UI);

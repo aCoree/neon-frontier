@@ -1,6 +1,6 @@
 // Benannte Orte der Karte (wie „Tilted Towers“ in Fortnite). major = große Gebiete, sonst kleine Orte/Gebäude.
 // Koordinaten in Weltmetern (Karte −200…200). Die Namen stehen auch als Schilder in der Welt.
-import { zoneAt } from './mapdata.js';
+import { zoneAt as zoneAtGlobal } from './mapdata.js';
 
 export const POIS = [
   { n: 'Neon Heights', x: 0, z: -100, major: 1 }, { n: 'Ironworks', x: 118, z: 18, major: 1 }, { n: 'Fort Helios', x: 128, z: -120, major: 1 },
@@ -11,8 +11,10 @@ export const POIS = [
   { n: 'Roter Anker', x: 0, z: 101 },
 ];
 
+const POIS_FRONTIER = POIS;
 // Name des Ortes für eine Position: erst kleine Orte in der Nähe, sonst das Gebiet (oder „U-Bahn“ / „Höhlen“ unter der Erde).
-export function placeName(x, z, underground = false) {
+export function placeName(x, z, underground = false, map = null) {
+  const POIS = map?.pois || POIS_FRONTIER, zoneAt = map?.zoneAt || zoneAtGlobal;
   if (underground) { const zn = zoneAt(x, z); return zn && zn.id === 'city' ? 'der U-Bahn' : 'den Höhlen'; }
   let best = null, bd = 16 * 16; for (const p of POIS) if (!p.major) { const d = (p.x - x) ** 2 + (p.z - z) ** 2; if (d < bd) { bd = d; best = p; } }
   if (best) return best.n;

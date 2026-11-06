@@ -7,7 +7,7 @@ export const BOUND = 196;
 
 export class World {
   constructor(map) {
-    this.map = map;
+    this.map = map; this.bound = map.bound || BOUND;
     this.objs = [];
     for (const b of map.boxes) this.objs.push(b);
     for (const c of map.cyls) this.objs.push(c);
@@ -79,7 +79,7 @@ export class World {
       e.z += e.vz * sdt; this._push(e, stepUp);
       this._vertical(e, sdt, stepUp);
     }
-    e.x = clamp(e.x, -BOUND, BOUND); e.z = clamp(e.z, -BOUND, BOUND);
+    const B = this.bound; e.x = clamp(e.x, -B, B); e.z = clamp(e.z, -B, B);
   }
 
   _push(e, stepUp) {

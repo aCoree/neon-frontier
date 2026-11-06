@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { Character } from './character.js';
 import { makeWeaponModel, tickWeaponFx } from './weapons.js';
-import { SKINS, WSKINS } from '../shared/defs.js';
+import { SKINS, WSKINS, BACKS, RARITY } from '../shared/defs.js';
 
 const W = 240, H = 280, WH = 150;   // Büsten hochkant, Waffen im Querformat
 let R = null;
@@ -49,5 +49,15 @@ export function wskinThumb(id, weapon = 'striker') {
   R.scene.add(root); R.rim.color.set(s.glow ?? 0x88ccff); R.cam.position.set(0, 0.04, d); R.cam.lookAt(0, 0, 0);
   R.renderer.render(R.scene, R.cam); const url = snap();
   R.scene.remove(root); cache.set(k, url); return url;
+}
+// Rückenstück: Büste von hinten (Flügel & Co. gut erkennbar)
+export function backThumb(id) {
+  const k = 'b:' + id; if (cache.has(k)) return cache.get(k); if (!R) init();
+  const b = BACKS.find(x => x.id === id) || BACKS[0], ch = new Character('vanguard', 'default', b.id);
+  ch.setWeapon('blade'); ch.equipT = 1; for (let i = 0; i < 6; i++) ch.update(0.1, { speed: 0, grounded: true, pitch: 0 });
+  ch.weaponGroup.visible = false; ch.root.rotation.y = Math.PI + 0.35; R.scene.add(ch.root);
+  const wide = (b.fx || []).includes('wings') || b.id === 'galaxy'; R.size(W, H); R.rim.color.set(RARITY[b.rarity].color); R.cam.position.set(-0.2, wide ? 1.6 : 1.62, wide ? 3.7 : 2.7); R.cam.lookAt(0, wide ? 1.4 : 1.42, 0);
+  R.renderer.render(R.scene, R.cam); const url = snap();
+  R.scene.remove(ch.root); ch.dispose(); cache.set(k, url); return url;
 }
 export const clearThumbs = () => cache.clear();

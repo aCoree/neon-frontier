@@ -104,8 +104,16 @@ export class Game {
   }
 
   // =================== Match-Beginn ===================
+  // Kartenwechsel: Engine zeigt die richtige Welt, das Spiel greift ab jetzt auf deren Kollision/Ansicht zu
+  useMap(id) {
+    const changed = this.engine.useMap(id || 'frontier');
+    this.world = this.engine.world; this.map = this.engine.map; this.view = this.engine.view; this.view.fx = this.fx;
+    if (changed) { this.pickups.clear(); this.engine.underground = false; }
+    return changed;
+  }
   onStart(m) {
     const resumed = this.inMatch && !this.matchEnded;
+    this.useMap(m.settings.map);
     this.settingsMatch = m.settings; this.training = !!m.settings.training; this.todMode = m.settings.tod; this.hour0 = m.hour0; this.scoreLimit = m.scoreLimit; this.timeLimit = m.timeLimit;
     this.srvT = m.T; this.srvLocal = performance.now(); this.lowgravUntil = m.lowgrav || 0;
     if (!resumed) this.resetMatch(m);
@@ -133,10 +141,10 @@ export class Game {
     // eigener Charakter
     if (this.char) { this.scene.remove(this.char.root); }
     const me = m.ents.find(e => e.id === m.you);
-    this.char = new Character(me?.skin || Progress.d.skin, me?.wskin || Progress.d.wskin); this.scene.add(this.char.root); this.char.root.visible = false;
+    this.char = new Character(me?.skin || Progress.d.skin, me?.wskin || Progress.d.wskin, me?.back || Progress.d.back); this.scene.add(this.char.root); this.char.root.visible = false;
     if (me && me.team >= 0) this.char.setTeamColor(TEAMS[me.team].hex);
     this.char.setWeapon('viper'); this.char.equipT = 1; this.myTeam = me ? me.team : -1;
-    if (this.menuChar) this.menuChar.root.visible = false; this.partyCharsVisible(false); if (this.weaponShow) this.weaponShow.visible = false; if (this.pedestal) this.pedestal.visible = false; this.skinPreview = null;
+    if (this.menuChar) this.menuChar.root.visible = false; this.partyCharsVisible(false); if (this.weaponShow) this.weaponShow.visible = false; if (this.weaponBack) this.weaponBack.visible = false; if (this.pedestal) this.pedestal.visible = false; this.skinPreview = null;
   }
   clearTransient() {
     for (const p of this.projs) this.scene.remove(p.mesh); this.projs = []; this.smokes = []; for (const s of this.supplies) this.scene.remove(s.g); this.supplies = [];
@@ -408,7 +416,7 @@ export class Game {
   // ---- Spieler-Callbacks ----
   surfaceAt(x, y, z, fl) {
     if (this.player.wade && x === this.player.x) return 'water';
-    const g = this.player.ground; if (g && g.y1 > this.world.terrain(x, z) + 0.2) { const zn = zoneAt(x, z); return zn && (zn.id === 'industrial' || zn.id === 'military') ? 'metal' : (y < -3 ? 'concrete' : 'concrete'); }
+    const g = this.player.ground; if (g && g.y1 > this.world.terrain(x, z) + 0.2) { const zn = this.map.zoneAt(x, z); return zn && (zn.id === 'industrial' || zn.id === 'military') ? 'metal' : (y < -3 ? 'concrete' : 'concrete'); }
     if (z > 112 && y < 3) return 'sand'; return 'grass';
   }
   stepSound(pos, fl, own) {
@@ -479,6 +487,7 @@ export class Game {
   enterMenu() {
     this.mode = 'menu'; this.inMatch = false; this.input.enabled = false; this.ctrl = false; this.matchEnded = false;
     for (const e of this.ents.values()) e.dispose && e.dispose(); this.ents.clear(); this.pickups.clear(); this.clearTransient();
+    this.useMap('frontier');
     if (this.char) this.char.root.visible = false;
     this.ensureMenuChar(); this.menuChar.root.visible = true;
     this.fx.beams.forEach(b => { b.t = 0; });
@@ -488,15 +497,15 @@ export class Game {
   }
   ensureMenuChar() {
     const d = this.skinPreview || this.menuOverride || Progress.d, wid = this.skinPreview?.weapon || Progress.d.menuWeapon || 'striker';
-    if (this.menuChar && (this.menuChar.skin.id !== d.skin || this.menuChar.wskinId !== d.wskin)) { this.scene.remove(this.menuChar.root); this.menuChar.dispose(); this.menuChar = null; }
+    if (this.menuChar && (this.menuChar.skin.id !== d.skin || this.menuChar.wskinId !== d.wskin || this.menuChar.backId !== (d.back || 'none'))) { this.scene.remove(this.menuChar.root); this.menuChar.dispose(); this.menuChar = null; }
     if (!this.menuChar) {
-      this.menuChar = new Character(d.skin, d.wskin); this.scene.add(this.menuChar.root);
+      this.menuChar = new Character(d.skin, d.wskin, d.back); this.scene.add(this.menuChar.root);
       this.menuChar.setWeapon(wid); this.menuChar.equipT = 1;
       this.menuChar.root.position.set(MENU_POS.x, MENU_POS.y, MENU_POS.z); this.menuChar.root.rotation.y = Math.PI;
     }
   }
   refreshMenuChar() { if (this.menuChar) { this.scene.remove(this.menuChar.root); this.menuChar.dispose(); this.menuChar = null; } this.ensureMenuChar(); this.menuChar.root.visible = this.mode === 'menu' && !(this.skinPreview && this.skinPreview.type === 'wskin'); }
-  setMenuView(m) { this.menuMode = m; if (m === 'skins') { this.menuYaw = this.menuYaw ?? 0.5; this.menuPitch = this.menuPitch ?? 0.05; this.menuZoom = this.menuZoom ?? 1; this.menuIdleAt = 0; } }
+  setMenuView(m) { this.menuMode = m; if (m === 'skins') { this.menuYaw = this.menuYaw ?? 0.5; this.menuPitch = this.menuPitch ?? 0.05; this.menuZoom = this.menuZoom ?? 1; this.menuIdleAt = 0; this.menuAuto = true; } else if (m === 'profile') { this.menuYaw = 0.4; this.menuPitch = 0.04; this.menuZoom = 1.08; this.menuAuto = false; } }
   // Shop-Vorschau: { type: 'skin'|'wskin', skin, wskin, weapon } – zeigt (auch ungekaufte) Skins in 360° ohne sie auszurüsten
   setSkinPreview(p) {
     this.skinPreview = p || null; this.refreshMenuChar(); this.syncWeaponShow(); this.syncPedestal();
@@ -505,7 +514,14 @@ export class Game {
   syncWeaponShow() {
     const sp = this.skinPreview, show = !!sp && sp.type === 'wskin' && this.mode === 'menu';
     if (this.menuChar) this.menuChar.root.visible = this.mode === 'menu' && !show;
-    if (!show) { if (this.weaponShow) this.weaponShow.visible = false; return; }
+    if (!show) { if (this.weaponShow) this.weaponShow.visible = false; if (this.weaponBack) this.weaponBack.visible = false; return; }
+    if (!this.weaponBack) {   // dunkle Scheibe HINTER der Waffe (3D, nicht als Overlay) – so liegt die Waffe immer davor
+      const cv = document.createElement('canvas'); cv.width = cv.height = 128; const x = cv.getContext('2d'), gr = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+      gr.addColorStop(0, 'rgba(6,9,20,.82)'); gr.addColorStop(0.6, 'rgba(6,9,20,.5)'); gr.addColorStop(1, 'rgba(6,9,20,0)'); x.fillStyle = gr; x.fillRect(0, 0, 128, 128);
+      const m = new THREE.Mesh(new THREE.CircleGeometry(1.7, 40), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false, toneMapped: false }));
+      m.renderOrder = -1; this.scene.add(m); this.weaponBack = m;
+    }
+    this.weaponBack.visible = true;
     const key = sp.weapon + '|' + sp.wskin;
     if (this.weaponShowKey !== key) {
       if (this.weaponShow) this.scene.remove(this.weaponShow);
@@ -532,10 +548,10 @@ export class Game {
   syncPartyChars(p) {
     this.partyChars = this.partyChars || new Map(); const want = new Map();
     if (p) { let i = 0; for (const m of p.members) if (!m.you) { want.set(m.name, { m, slot: i++ }); } }
-    for (const [name, c] of [...this.partyChars]) { const w = want.get(name); if (!w || c.skin !== w.m.skin || c.wskin !== w.m.wskin) { this.scene.remove(c.char.root); c.char.dispose(); this.scene.remove(c.plate); c.plate.material.map.dispose(); c.plate.material.dispose(); this.partyChars.delete(name); } }
+    for (const [name, c] of [...this.partyChars]) { const w = want.get(name); if (!w || c.skin !== w.m.skin || c.wskin !== w.m.wskin || c.back !== (w.m.back || 'none')) { this.scene.remove(c.char.root); c.char.dispose(); this.scene.remove(c.plate); c.plate.material.map.dispose(); c.plate.material.dispose(); this.partyChars.delete(name); } }
     for (const [name, w] of want) {
       let c = this.partyChars.get(name);
-      if (!c) { const ch = new Character(w.m.skin, w.m.wskin); ch.setWeapon(['viper', 'striker', 'hornet'][w.slot % 3]); ch.equipT = 1; this.scene.add(ch.root); c = { char: ch, skin: w.m.skin, wskin: w.m.wskin, plate: this.partyPlate(name, w.m.leader) }; this.scene.add(c.plate); this.partyChars.set(name, c); }
+      if (!c) { const ch = new Character(w.m.skin, w.m.wskin, w.m.back); ch.setWeapon(['viper', 'striker', 'hornet'][w.slot % 3]); ch.equipT = 1; this.scene.add(ch.root); c = { char: ch, skin: w.m.skin, wskin: w.m.wskin, back: w.m.back || 'none', plate: this.partyPlate(name, w.m.leader) }; this.scene.add(c.plate); this.partyChars.set(name, c); }
       c.slot = w.slot;
     }
     this.partyCharsVisible(this.mode === 'menu');
@@ -584,21 +600,27 @@ export class Game {
   updateMenu(dt) {
     this.menuT += dt; const mc = this.menuChar; if (!mc) return;
     if (this.pedestal) this.pedestal.visible = this.menuMode === 'skins' && !!this.skinPreview && this.skinPreview.type === 'skin';
-    const nowS = performance.now() / 1000; if (this.menuMode === 'skins' && nowS > (this.menuIdleAt || 0)) this.menuYaw += dt * 0.5;   // ohne Eingabe dreht sich die Vorschau langsam
+    const nowS = performance.now() / 1000; if (this.menuMode === 'skins' && this.menuAuto && nowS > (this.menuIdleAt || 0)) this.menuYaw += dt * 0.5;   // ohne Eingabe dreht sich die Vorschau langsam
     mc.update(dt, { speed: 0, grounded: true, pitch: 0 }); this.updatePartyChars(dt);
-    const target = new THREE.Vector3(MENU_POS.x, MENU_POS.y + (this.menuMode === 'skins' ? 1.0 : 1.25), MENU_POS.z);
-    let a, dist, h;
-    if (this.menuMode === 'skins') { a = this.menuYaw; dist = 3.3 * this.menuZoom; h = 1.2 + this.menuPitch * dist * 0.9; mc.root.rotation.y = 0; }
+    const target = new THREE.Vector3(MENU_POS.x, MENU_POS.y + (this.menuMode === 'skins' || this.menuMode === 'profile' ? 1.0 : 1.25), MENU_POS.z);
+    let a, dist, h; const still = this.menuMode === 'skins' || this.menuMode === 'profile';
+    if (still) { a = this.menuYaw; dist = 3.3 * this.menuZoom; h = 1.2 + this.menuPitch * dist * 0.9; mc.root.rotation.y = 0; }
     else { a = Math.sin(this.menuT * 0.12) * 0.5 - 0.25; dist = 4.3; h = 1.45; mc.root.rotation.y = -0.45; }
     const off = this.menuMode === 'skins' ? 0.0 : 0.0;
-    const side = this.menuMode === 'skins' ? -0.85 : -1.3;
+    const side = this.menuMode === 'profile' ? -1.75 : this.menuMode === 'skins' ? -0.85 : -1.3;
     this.camera.position.set(target.x + Math.sin(a) * dist + Math.cos(a) * side * 0.0, MENU_POS.y + h, target.z + Math.cos(a) * dist);
     this.camera.lookAt(target.x + Math.cos(a) * -side * 0.0, target.y - 0.05, target.z);
     // Seitlicher Versatz, damit der Charakter rechts vom Menü steht
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right, side); this.camera.lookAt(target.clone().addScaledVector(right, side * 0.5));
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right, side); const look = target.clone().addScaledVector(right, side * 0.5); this.camera.lookAt(look);
+    if (this.menuMode === 'profile' && innerWidth > 900) {   // Charakter mittig in die freie Fläche rechts neben dem Profil-Fenster schieben
+      this.camera.updateMatrixWorld(); const vw = innerWidth, tgtN = ((Math.min(972, vw - 298) + vw) / 2) / vw * 2 - 1, p = new THREE.Vector3(MENU_POS.x, MENU_POS.y + 1.0, MENU_POS.z).project(this.camera);
+      const hw = Math.tan(this.camera.fov * Math.PI / 360) * this.camera.position.distanceTo(target) * this.camera.aspect, rr = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion), dx = (tgtN - p.x) * hw;
+      this.camera.position.addScaledVector(rr, -dx); this.camera.lookAt(look.addScaledVector(rr, -dx));
+    }
     if (this.weaponShow?.visible) {   // Waffen-Vorschau: Kamera fest, Waffe dreht sich (Ziehen = drehen/kippen, Rad = Zoom)
       const ws = this.weaponShow, k = ws.userData.k || 1, tg = new THREE.Vector3(MENU_POS.x, MENU_POS.y + 1.35, MENU_POS.z);
       ws.position.copy(tg); ws.rotation.set(this.menuPitch * 1.6, this.menuYaw + Math.PI / 2, 0);
+      if (this.weaponBack) { this.weaponBack.position.set(tg.x, tg.y, tg.z - 1.3); this.weaponBack.scale.setScalar(this.menuZoom); }
       const dd = 3.0 * this.menuZoom; this.camera.position.set(tg.x, tg.y + 0.1, tg.z + dd); this.camera.lookAt(tg.x, tg.y, tg.z);
       const right2 = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right2, -0.95 * this.menuZoom); this.camera.lookAt(tg.clone().addScaledVector(right2, -0.95 * this.menuZoom));
     }
@@ -649,7 +671,7 @@ export class Game {
     // Umgebung
     this.lastAmbT -= dt;
     if (this.lastAmbT <= 0) {
-      this.lastAmbT = 0.6; const zn = zoneAt(p.x, p.z); const underground = p.y < this.world.terrain(p.x, p.z) - 3 && p.y < 4;
+      this.lastAmbT = 0.6; const zn = this.map.zoneAt(p.x, p.z); const underground = p.y < this.world.terrain(p.x, p.z) - 3 && p.y < 4;
       audio.setAmbience(zn ? zn.amb : 'wind', eng.sky.night, underground, p.wade); if (underground !== eng.underground) { eng.underground = underground; eng.setHour(eng.hour); }
     }
     // Kamera-Fokus für Schatten
@@ -683,7 +705,7 @@ export class Game {
       else this.send({ k: 'interact', t: best.t, id: best.id });
     }
   }
-  zoneName() { const z = zoneAt(this.player.x, this.player.z); if (this.player.y < this.world.terrain(this.player.x, this.player.z) - 3 && this.player.y < 4) return z && z.id === 'city' ? 'U-Bahn' : 'Untergrund'; return z && !z.hidden ? z.name : z && z.hidden ? 'Crystal Caves' : 'Niemandsland'; }
+  zoneName() { const z = this.map.zoneAt(this.player.x, this.player.z); if (this.player.y < this.world.terrain(this.player.x, this.player.z) - 3 && this.player.y < 4) return z && z.id === 'city' ? 'U-Bahn' : 'Untergrund'; return z && !z.hidden ? z.name : z && z.hidden ? 'Crystal Caves' : 'Niemandsland'; }
   buildDuck() {
     const sp = this.map.secrets.find(s => s.id === 'duck'); if (!sp) return;
     const g = new THREE.Group(); const gold = new THREE.MeshStandardMaterial({ color: 0xffd24a, metalness: 1, roughness: 0.2, emissive: 0x6a4a00, emissiveIntensity: 0.6 });

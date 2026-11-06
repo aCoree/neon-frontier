@@ -6,6 +6,7 @@ import { makeWeaponModel, HOLD } from './weapons.js';
 import { clamp, lerp, angDiff, smoothstep } from '../shared/util.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildExtras, tickExtras, disposeExtras } from './skinfx.js';
+import { buildBack, tickBack, disposeBack } from './backs.js';
 
 const gcache = new Map();
 const RB = (w, h, d, r = 0.02) => { const k = `${w}|${h}|${d}|${r}`; let g = gcache.get(k); if (!g) { g = new RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2.1, h / 2.1, d / 2.1)); gcache.set(k, g); } return g; };
@@ -18,8 +19,8 @@ const POLE_R = new THREE.Vector3(-0.55, -1, -0.35), POLE_L = new THREE.Vector3(0
 const _v = new THREE.Vector3(), _u = new THREE.Vector3(), _p = new THREE.Vector3(), _m = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 
 export class Character {
-  constructor(skinId = 'vanguard', wskinId = 'default') {
-    this.skin = SKINS.find(s => s.id === skinId) || SKINS[0];
+  constructor(skinId = 'vanguard', wskinId = 'default', backId = 'none') {
+    this.skin = SKINS.find(s => s.id === skinId) || SKINS[0]; this.backId = backId || 'none';
     this.wskinId = wskinId;
     this.root = new THREE.Group(); this.root.name = 'char';
     this.phase = 0; this.crouchK = 0; this.legYaw = 0; this.sprintK = 0; this.aimK = 0;
@@ -112,7 +113,7 @@ export class Character {
       for (let i = 0; i < 3; i++) { const seg = this.mesh(RB(0.16, 0.05, 0.3, 0.02), new THREE.MeshStandardMaterial({ color: this.skin.accent, emissive: this.skin.accent, emissiveIntensity: 0.6, roughness: 0.7 }), this.scarf, 0, -i * 0.01, -0.15 - i * 0.28, false); seg.rotation.x = 0; }
     }
     this.optimize();
-    buildExtras(this);
+    buildExtras(this); if (this.backId !== 'none') buildBack(this, this.backId);
     this.tmpMat = new THREE.Matrix4();
   }
 
@@ -335,6 +336,7 @@ export class Character {
     }
     // Seltene Skins: Extras animieren
     if (this.skin.extras) tickExtras(this, dt, speed);
+    if (this.back) tickBack(this, dt, speed);
     // Schal
     if (this.scarf) { this.scarfLag += (clamp(speed / 8, 0, 1) - this.scarfLag) * Math.min(1, dt * 4); this.scarf.rotation.x = -0.3 * this.scarfLag + Math.sin(performance.now() * 0.006) * 0.05 + (grounded ? 0 : 0.35); }
     // Muzzle flash Skalierung / Klinge
@@ -342,5 +344,6 @@ export class Character {
   }
 
   getMuzzleWorld(out) { this.weaponGroup.userData.muzzle.getWorldPosition(out); return out; }
-  dispose() { disposeExtras(this); }
+  setBack(id) { id = id || 'none'; if (id === this.backId) return; this.backId = id; buildBack(this, id); }
+  dispose() { disposeExtras(this); disposeBack(this); }
 }

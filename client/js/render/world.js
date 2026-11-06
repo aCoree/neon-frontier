@@ -11,8 +11,8 @@ const CELL = 110;
 const PLATEAU = { city: '#74777d', industrial: '#6f6a60', military: '#8a9097', coast: '#d9c58f', training: '#767b72', station: '#6c716d' };
 
 export class WorldView {
-  constructor(scene, map, world, mats, quality) {
-    this.scene = scene; this.map = map; this.world = world; this.M = mats; this.q = quality;
+  constructor(scene, map, world, mats, quality, shared = {}) {
+    this.shared = shared; this.scene = scene; this.map = map; this.world = world; this.M = mats; this.q = quality;
     this.group = new THREE.Group(); scene.add(this.group);
     this.windU = { value: 0 };
     this.anims = []; this.dynDoors = new Map(); this.dynMovers = new Map(); this.chestMeshes = new Map(); this.switchMeshes = new Map();
@@ -33,9 +33,14 @@ export class WorldView {
     progress(1, 'Fertig');
   }
 
+  // Alles auf einmal (für Karten, die erst bei Bedarf gebaut werden, z. B. die Arena)
+  buildSync() { this.buildTerrain(); this.buildParts(); this.buildProps(); this.buildGrass(); this.buildWater(); this.buildGlows(); this.buildLabels(); this.buildLights(); this.buildAnims(); this.buildInteractive(); }
+  dispose() { this.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); this.scene.remove(this.group); }
+
   // ---------------- Gelände ----------------
   biome(x, z, h, slope) {
     const c = new THREE.Color();
+    if (this.map.style === 'arena') { const n = fbm(x * 0.05, z * 0.05, 3), k = Math.min(1, Math.max(Math.abs(x) / 44, Math.abs(z) / 34)); return c.set('#1d2432').lerp(new THREE.Color('#34415a'), n * 0.9).multiplyScalar(0.8 + 0.2 * (1 - k)); }
     const n = fbm(x * 0.06, z * 0.06, 3), n2 = fbm(x * 0.4 + 9, z * 0.4, 2);
     const forest = ZONES.find(q => q.id === 'forest');
     const fw = 1 - smoothstep(0.7, 1.3, zoneNorm(forest, x, z));
@@ -58,7 +63,7 @@ export class WorldView {
   }
 
   buildTerrain() {
-    const step = 2, R = 258, N = (R * 2) / step;
+    const step = 2, R = this.map.terrainR || 258, N = (R * 2) / step;
     const pos = [], col = [], uv = [], idx = [];
     const hs = this.map.holes, T = this.map.terrainY;
     const hv = (x, z) => T(x, z);
@@ -194,6 +199,7 @@ export class WorldView {
   }
 
   buildGrass() {
+    if (this.map.style === 'arena') return;
     const sg = smallGeos();
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide });
     const windU = this.windU;
@@ -234,6 +240,7 @@ export class WorldView {
 
   // ---------------- Wasser ----------------
   buildWater() {
+    if (this.map.style === 'arena') { this.waterTex = [{ offset: { set() {} } }, { offset: { set() {} } }]; return; }
     const S = 256, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d'), d = x.createImageData(S, S);
     const H = new Float32Array(S * S);
     for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const u = i / S, v = j / S; const f = (a, b) => fbm(a * 6, b * 6, 4); H[j * S + i] = f(u, v) * (1 - u) * (1 - v) + f(u - 1, v) * u * (1 - v) + f(u, v - 1) * (1 - u) * v + f(u - 1, v - 1) * u * v; }
@@ -281,7 +288,8 @@ export class WorldView {
     }
   }
   buildLights() {
-    for (let i = 0; i < this.q.lights; i++) { const l = new THREE.PointLight(0xffffff, 0, 10, 1.6); l.userData = { src: null }; this.scene.add(l); this.lightPool.push(l); }
+    if (this.shared.lightPool) this.lightPool = this.shared.lightPool;   // alle Karten teilen sich dieselben Lichter (sonst steigt die Shader-Last)
+    else { for (let i = 0; i < this.q.lights; i++) { const l = new THREE.PointLight(0xffffff, 0, 10, 1.6); l.userData = { src: null }; this.scene.add(l); this.lightPool.push(l); } this.shared.lightPool = this.lightPool; }
     this.dynLights = [];
   }
   updateLights(cam, t, dt) {

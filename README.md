@@ -94,7 +94,8 @@ Umgebungsvariablen: `PORT` (vom Hoster gesetzt), `SERVE_CLIENT=0`, sowie für Ko
 * **Geheimnisse:** versteckte Kisten (3 Stufen), 7 Daten-Kerne, geheimer Tresorraum in der U-Bahn (Hebel), Kristall-Geheimkammer, Industrie-Tresor (Hauptschalter im Kontrollgebäude), eine goldene Ente, ein roter Knopf („nicht drücken“ → 25 s Schwerkraft-Anomalie), Teleporter, Sprungplattformen, Aufzüge, Nachschub-Abwürfe.
 * **Waffen:** Viper, Hand Cannon, AR-7 Striker, Hornet SMG, Breaker (Shotgun), Marksman DMR, Longshot (Sniper), Stormcaller (Raketenwerfer), Pulse Rifle (Plasma), Lancer (Laser), Plasma-Klinge (Nahkampf).
 * **Items:** Medkit, Schildtrank, Splittergranate, Rauchbombe, Geschwindigkeits-/Sprung-Boost, Schutzschild; Gadgets: Enterhaken, Jetpack, Teleporter, Kampfdrohne, Scanner.
-* **Fortschritt:** XP, Level, 8 Charakter-Skins, 6 Waffen-Skins, 14 Erfolge (im Browser gespeichert).
+* **Fortschritt:** XP, Level, 12 Charakter-Skins, 10 Waffen-Skins, 10 Rückenstücke, 14 Erfolge (im Browser gespeichert). Mit Konto: Ränge von Bronze bis Champion (ELO), Profil mit Namensfarbe/Avatar/Bio.
+* **Karten:** *Neon Frontier* (große Welt) und *Arena Zero* (kompakte Neon-Arena, immer für Ranked und 1-gegen-1).
 
 ## 5. Technik
 

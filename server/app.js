@@ -60,9 +60,19 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     if (!db) return;
     const mode = r.settings.mode, secs = Math.round(r.T - (r.matchStart || 0)), humans = r.humans().length;
     stats.inc('match_end', mode); stats.inc('match_secs', mode, secs); stats.inc('match_humans', mode, humans);
+    // ELO-Eingaben: Wertungen aller Teilnehmer VOR dem Match (Team gegen Gegner-Durchschnitt; ohne Teams gilt die Platzierung)
+    const rated = results.some(x => x.ranked) && api.flags.ranked, rp = new Map();
+    if (rated) for (const row of await db.all('SELECT user_id, rank_points FROM user_stats WHERE user_id = ANY($1::bigint[])', [results.map(x => x.userId)])) rp.set(Number(row.user_id), row.rank_points);
+    const avg = (l) => (l.length ? l.reduce((s, v) => s + v, 0) / l.length : 0), order = [...results].sort((p, q) => q.kills - p.kills || p.deaths - q.deaths);
     for (const x of results) {
       try {
-        const rew = await applyMatchResult(db, x.userId, matchId, { kills: x.kills, deaths: x.deaths, hs: x.hs, dmg: x.dmg, won: x.won, secs: x.secs, humans: x.humans, ranked: x.ranked && api.flags.ranked });
+        let elo = {};
+        if (rated && x.ranked) {
+          const mine = rp.get(x.userId) ?? 0;
+          if (x.team >= 0) { const mates = results.filter(y => y.team === x.team), foes = results.filter(y => y.team !== x.team); elo = { team: avg(mates.map(y => rp.get(y.userId) ?? 0)), opps: foes.map(y => rp.get(y.userId) ?? 0), score: x.draw ? 0.5 : (x.won ? 1 : 0) }; }
+          else { const n = results.length, place = order.indexOf(x); elo = { team: mine, opps: results.filter(y => y !== x).map(y => rp.get(y.userId) ?? 0), score: n > 1 ? (x.won ? 1 : (n - 1 - place) / (n - 1)) : 1 }; }
+        }
+        const rew = await applyMatchResult(db, x.userId, matchId, { kills: x.kills, deaths: x.deaths, hs: x.hs, dmg: x.dmg, won: x.won, secs: x.secs, humans: x.humans, ranked: x.ranked && api.flags.ranked, ...elo });
         if (rew) r.send(x.member, { k: 'reward', matchId, ...rew });
       } catch (e) { M.errors++; log.error('[db] Match-Ergebnis', e.message); }
     }
@@ -76,7 +86,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     onCancel: (t, reason) => { for (const m of t.members) notify(m.userId, { k: 'mm_cancelled', reason }); },
     onMatch: ({ mode, ranked, downgraded, tickets, humans, bots, filled }) => {
       const code = newCode(), cfg = MM_MODES[mode], hooks = hooksFor();
-      const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false }, hooks, ranked: !!ranked && !!api.flags.ranked }); hooks.room = room;
+      const rk = !!ranked && !!api.flags.ranked;   // Ranked und alle 1-gegen-1-Duelle laufen auf der kompakten Arena, alles andere auf der Weltkarte
+      const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false, map: rk || mode === 'duel' ? 'arena' : 'frontier' }, hooks, ranked: rk }); hooks.room = room;
       room.mm = { expect: new Set(tickets.flatMap(t => t.members.map(m => m.userId))), created: Date.now(), deadline: Date.now() + 25000 };
       rooms.set(code, room); stats.inc('mm_match', mode); if (filled) stats.inc('mm_filled', mode);
       log.log(`[mm] ${mode}: ${humans} Spieler${filled ? ' + Bots' : ''} → Raum ${code}`);
@@ -126,8 +137,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
         }
         if (api.maintenance && !(acct && can(acct.role, 'MODERATOR'))) { client.send({ k: 'err', code: 'maintenance', text: 'NEON FRONTIER wird gerade gewartet. Bitte später erneut versuchen.' }); client.close(); return; }
         if (acct) {
-          const s = await db.one('SELECT level, equipped_skin, equipped_wskin FROM user_stats WHERE user_id=$1', [acct.id]);
-          profile = { name: acct.username, skin: s ? s.equipped_skin : 'vanguard', wskin: s ? s.equipped_wskin : 'default', level: s ? s.level : 1, userId: Number(acct.id), role: acct.role };
+          const s = await db.one('SELECT level, equipped_skin, equipped_wskin, equipped_back, rank_points, name_color, avatar_bg, avatar_icon FROM user_stats WHERE user_id=$1', [acct.id]);
+          profile = { name: acct.username, skin: s ? s.equipped_skin : 'vanguard', wskin: s ? s.equipped_wskin : 'default', back: s ? s.equipped_back : 'none', rp: s ? s.rank_points : 0, nc: s ? s.name_color : '', av: s ? { bg: s.avatar_bg, icon: s.avatar_icon } : null, level: s ? s.level : 1, userId: Number(acct.id), role: acct.role };
         } else {
           let name = String(msg.name || 'Gast').replace(/[^\w\- äöüÄÖÜß]/g, '').slice(0, 14) || 'Gast';
           if (db) { const clash = await db.one('SELECT 1 FROM users WHERE username_lower=$1', [name.toLowerCase()]); if (clash) name = name.slice(0, 11) + '_G' + Math.floor(Math.random() * 90 + 10); }

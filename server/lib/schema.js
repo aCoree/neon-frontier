@@ -99,4 +99,12 @@ export const MIGRATIONS = [
       PRIMARY KEY (day, metric, dim)
     )
   ` },
+  { v: 7, name: 'ranks_profile_backs', sql: `
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS ranked_matches INT NOT NULL DEFAULT 0;
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS equipped_back TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS name_color TEXT NOT NULL DEFAULT 'white';
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS avatar_bg TEXT NOT NULL DEFAULT 'ocean';
+    ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS avatar_icon TEXT NOT NULL DEFAULT 'skin'
+  ` },
 ];
