@@ -36,6 +36,7 @@ export const Account = {
   friendAction(kind, target) { return this.req('POST', '/api/friends/' + kind, { target }); },
   profile(name) { return this.req('GET', '/api/profile/' + encodeURIComponent(name)); },
   season() { return this.req('GET', '/api/season'); },
+  leaderboard(kind) { return this.req('GET', '/api/leaderboard?kind=' + encodeURIComponent(kind || 'season')); },
   async claimSeason(tier) { const r = await this.req('POST', '/api/season/claim', { tier }); await this.refresh(); return r; },
   async refresh() { if (!this.token) return; try { const m = await this.req('GET', '/api/me'); this.user = m.user; } catch { /* ignorieren */ } },
   report(target, reason, matchId) { return this.req('POST', '/api/report', { target, reason, matchId }); },

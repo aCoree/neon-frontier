@@ -197,6 +197,20 @@ export class Api {
       me: { points: pts, matches: me ? me.matches : 0, wins: me ? me.wins : 0, kills: me ? me.kills : 0, claimed, position: pos },
       top: top.map((r, i) => ({ pos: i + 1, name: r.username, points: r.points, wins: r.wins, level: r.level })) };
   }
+  // Ranglisten (Top 50): 'season' = Saisonpunkte dieses Monats, 'rank' = Rangpunkte (nur Ranked-Matches). Gesperrte Spieler tauchen nicht auf.
+  async leaderboard(user, kind) {
+    const ok = "NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now())";
+    if (kind === 'rank') {
+      const mine = (await this.db.one('SELECT rank_points FROM user_stats WHERE user_id=$1', [user.id]))?.rank_points ?? 0;
+      const rows = await this.db.all(`SELECT u.username, st.level, st.rank_points, st.wins, st.matches FROM user_stats st JOIN users u ON u.id=st.user_id WHERE st.rank_points > 0 AND ${ok} ORDER BY st.rank_points DESC, st.wins DESC, u.username_lower ASC LIMIT 50`);
+      const pos = mine > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM user_stats WHERE rank_points > $1', [mine])).n) + 1 : null;
+      return { kind: 'rank', title: 'Rangliste', unit: 'RP', me: { points: mine, position: pos, rank: rankOf(mine) }, rows: rows.map((r, i) => ({ pos: i + 1, name: r.username, level: r.level, points: r.rank_points, rank: rankOf(r.rank_points), wins: r.wins, matches: r.matches })) };
+    }
+    const s = seasonOf(), me = await this.db.one('SELECT points FROM season_stats WHERE season_id=$1 AND user_id=$2', [s.id, user.id]), pts = me ? me.points : 0;
+    const rows = await this.db.all(`SELECT u.username, ss.points, ss.wins, ss.matches, st.level, st.rank_points FROM season_stats ss JOIN users u ON u.id=ss.user_id JOIN user_stats st ON st.user_id=u.id WHERE ss.season_id=$1 AND ss.points>0 AND ${ok} ORDER BY ss.points DESC, ss.updated_at ASC LIMIT 50`, [s.id]);
+    const pos = pts > 0 ? Number((await this.db.one('SELECT COUNT(*) AS n FROM season_stats WHERE season_id=$1 AND points > $2', [s.id, pts])).n) + 1 : null;
+    return { kind: 'season', title: 'Saison-Rangliste', unit: 'Punkte', season: { id: s.id, name: s.name, endsAt: s.endsAt }, me: { points: pts, position: pos }, rows: rows.map((r, i) => ({ pos: i + 1, name: r.username, level: r.level, points: r.points, rank: rankOf(r.rank_points), wins: r.wins, matches: r.matches })) };
+  }
   async claimSeason(req, res, user) {
     if (!this.flags.seasons) return this.send(res, 503, { error: 'Seasons sind gerade deaktiviert.' });
     if (this.rl.hit('seasonclaim:' + user.id, 20, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' });
@@ -250,6 +264,7 @@ export class Api {
       if (m === 'POST' && url === '/api/shop/buy') return await this.buy(req, res, user), true;
       if (m === 'POST' && url === '/api/equip') return await this.equip(req, res, user), true;
       if (m === 'GET' && url === '/api/season') return this.send(res, 200, await this.season(user)), true;
+      if (m === 'GET' && url.split('?')[0] === '/api/leaderboard') return this.send(res, 200, await this.leaderboard(user, new URLSearchParams(url.split('?')[1] || '').get('kind'))), true;
       if (m === 'POST' && url === '/api/season/claim') return await this.claimSeason(req, res, user), true;
       if (m === 'POST' && url === '/api/daily/claim') return await this.claimDaily(res, user), true;
       if (m === 'POST' && url === '/api/report') return await this.report(req, res, user), true;

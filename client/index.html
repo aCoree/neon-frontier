@@ -30,6 +30,7 @@
       <button class="hm-tab on" id="tab-play">Spielen</button>
       <button class="hm-tab" data-go="skins">Skins</button>
       <button class="hm-tab" data-go="season">Season <small id="season-sub"></small></button>
+      <button class="hm-tab" data-go="board">Rangliste</button>
       <button class="hm-tab" data-go="friends">Freunde <small id="fr-count"></small></button>
       <button class="hm-tab" data-go="ach">Erfolge <small id="ach-count"></small></button>
       <button class="hm-tab" data-go="settings">Einstellungen</button>
@@ -117,38 +118,64 @@
 
 <!-- ================= SEASON ================= -->
 <section id="s-season" class="screen">
-  <div class="panel wide">
-    <header><button class="back" data-back>‹ Zurück</button><h2>Season</h2></header>
+  <div class="sp-wrap">
+    <header class="sp-top">
+      <button class="back" data-back>‹ Zurück</button>
+      <div class="sp-title"><small>SAISON-PASS</small><h2 id="se-name">Saison</h2></div>
+      <div class="sp-end" id="se-left"></div>
+      <button class="btn" id="se-board">🏆 Rangliste</button>
+    </header>
     <div id="se-guest" class="empty" style="display:none">Melde dich mit einem Konto an, um Saisonpunkte zu sammeln. <button class="link" id="se-login">Anmelden</button></div>
     <div id="se-off" class="empty" style="display:none">Seasons sind auf diesem Server gerade deaktiviert.</div>
-    <div class="grid2" id="se-main">
-      <div>
-        <div class="se-head"><b id="se-name">Saison</b><small id="se-left"></small></div>
-        <div class="se-pts"><span id="se-pts">0</span><small>Saisonpunkte</small><small id="se-pos"></small></div>
-        <div class="xb se-bar"><i id="se-fill" style="width:0%"></i></div><small id="se-next" class="se-hint"></small>
-        <h4>Belohnungen</h4>
-        <div class="rooms se-tiers" id="se-tiers"></div>
-        <small class="se-hint">Punkte: Ranglisten-Matches mit mind. 2 Spielern zählen voll, Matches gegen Bots nur zu 25 %. Eine neue Saison beginnt jeden Monat bei 0.</small>
+    <div id="se-main">
+      <div class="sp-hero">
+        <div class="sp-pts"><b id="se-pts">0</b><span>Saisonpunkte</span><em id="se-pos"></em></div>
+        <div class="sp-prog">
+          <div class="sp-row"><b id="se-lvl">Stufe 0</b><small id="se-next"></small></div>
+          <div class="sp-track"><i id="se-fill"></i><div class="sp-marks" id="se-marks"></div></div>
+          <div class="sp-sum" id="se-sum"></div>
+        </div>
+        <button class="sp-all" id="se-claimall" style="display:none"><span>ALLE ABHOLEN</span><b id="se-claimall-n"></b></button>
       </div>
-      <div>
-        <h4>Top 25 <small id="se-me-line"></small></h4>
-        <div class="rooms se-board" id="se-board" style="max-height:62vh"></div>
-      </div>
+      <div class="sp-tiers" id="se-tiers"></div>
+      <p class="sp-hint">So sammelst du Punkte: Ranked-Matches mit mindestens 2 echten Spielern zählen voll, Matches gegen Bots nur zu 25 %. Jeden Monat beginnt eine neue Saison bei 0 – hol dir deine Belohnungen vorher ab.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RANGLISTE ================= -->
+<section id="s-board" class="screen">
+  <div class="lb-wrap">
+    <header class="lb-top">
+      <button class="back" data-back>‹ Zurück</button>
+      <div class="sp-title"><small id="lb-sub">Top 50</small><h2>Rangliste</h2></div>
+      <div class="seg lb-seg" id="lb-kind"><button class="on" data-k="season">Saison</button><button data-k="rank">Rang</button></div>
+    </header>
+    <div id="lb-guest" class="empty" style="display:none">Melde dich an, um die Ranglisten zu sehen. <button class="link" id="lb-login">Anmelden</button></div>
+    <div id="lb-main">
+      <div class="lb-podium" id="lb-podium"></div>
+      <div class="lb-list" id="lb-list"></div>
+      <div class="lb-me" id="lb-me"></div>
     </div>
   </div>
 </section>
 
 <!-- ================= PROFIL ================= -->
 <section id="s-profile" class="screen">
-  <div class="skins-left panel prof">
-    <header><button class="back" data-back>‹ Zurück</button><h2 id="pf-title">Profil</h2></header>
-    <div class="pf-head"><div class="pf-av" id="pf-av">?</div><div class="pf-id"><div class="pf-name" id="pf-name"></div><div class="pf-tags" id="pf-tags"></div></div><div class="pf-lvl"><b id="pf-lvl">1</b><small>LEVEL</small></div></div>
-    <div class="xb pf-xb"><i id="pf-xp" style="width:0%"></i></div><small class="pf-sm" id="pf-xptxt"></small>
+  <div class="prof-panel">
+    <header class="pf-top"><button class="back" data-back>‹ Zurück</button><span class="pf-kicker" id="pf-title">Profil</span></header>
+    <div class="pf-hero">
+      <div class="pf-av" id="pf-av">?</div>
+      <div class="pf-id"><div class="pf-name" id="pf-name"></div><div class="pf-tags" id="pf-tags"></div><p class="pf-since" id="pf-since"></p></div>
+      <div class="pf-lvl"><b id="pf-lvl">1</b><small>LEVEL</small></div>
+    </div>
+    <div class="pf-xpwrap"><div class="xb pf-xb"><i id="pf-xp" style="width:0%"></i></div><small class="pf-sm" id="pf-xptxt"></small></div>
     <div class="pf-rank" id="pf-rank"></div>
+    <h4>Statistik</h4>
     <div class="pf-stats" id="pf-stats"></div>
+    <h4>Ausrüstung</h4>
     <div class="pf-gear" id="pf-gear"></div>
     <div class="row" id="pf-actions"></div>
-    <p class="pf-since" id="pf-since"></p>
   </div>
 </section>
 
@@ -247,13 +274,17 @@
 </section>
 
 <!-- ================= SKINS ================= -->
-<section id="s-skins" class="screen">
-  <div class="skins-left panel">
-    <header><button class="back" data-back>‹ Zurück</button><h2>Skins</h2></header>
-    <div class="hint" id="skin-coins"></div><h4>Charaktere</h4><div class="skin-grid" id="skin-grid"></div>
-    <h4>Waffen-Skins</h4><div class="skin-grid small" id="wskin-grid"></div>
-    <h4>Vorschau-Waffe</h4><div class="seg wrap" id="skin-weapon"></div>
-    <p class="hint">Skins sind rein kosmetisch und geben keinen Vorteil. Neue Skins schaltest du durch Level-Aufstiege frei.</p>
+<section id="s-skins" class="screen shop">
+  <div class="shop-left">
+    <header class="shop-head"><button class="back" data-back>‹ Zurück</button><h2>Garderobe</h2><div class="shop-coins" id="shop-coins"></div></header>
+    <div class="shop-tabs" id="shop-tabs"><button class="on" data-tab="skin">Charaktere</button><button data-tab="wskin">Waffen-Skins</button></div>
+    <div class="shop-grid" id="shop-grid"></div>
+    <div class="shop-foot"><span>Vorschau-Waffe</span><div class="seg wrap" id="skin-weapon"></div></div>
+  </div>
+  <div class="shop-stage" id="shop-stage">
+    <div class="shop-info" id="shop-info"></div>
+    <div class="shop-hint" id="shop-hint">↺ Ziehen zum Drehen · Mausrad zum Zoomen</div>
+    <div class="shop-buy"><div class="shop-note" id="shop-note"></div><button class="shop-btn" id="shop-btn"></button></div>
   </div>
 </section>
 
@@ -379,7 +410,7 @@
   <div class="dlg-row"><button class="btn" id="dlg-cancel">Abbrechen</button><button class="btn primary" id="dlg-ok">OK</button></div></div></div>
 <div id="lvlup"></div>
 <div id="achv-pop"></div>
-<div id="portrait-warn">Bitte Gerät drehen – NEON FRONTIER braucht Tastatur &amp; Maus (Desktop-Browser).</div>
+<div id="portrait-warn">Bitte drehe dein Gerät ins Querformat.<br><small style="font-weight:600;opacity:.7">NEON FRONTIER läuft auf dem Handy im Querformat (auch mit Tastatur &amp; Maus am Desktop).</small></div>
 
 <script type="module" src="js/main.js"></script>
 </body>

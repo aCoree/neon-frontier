@@ -5,6 +5,7 @@ import { SKINS, WEAPONS } from '../shared/defs.js';
 import { makeWeaponModel, HOLD } from './weapons.js';
 import { clamp, lerp, angDiff, smoothstep } from '../shared/util.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { buildExtras, tickExtras, disposeExtras } from './skinfx.js';
 
 const gcache = new Map();
 const RB = (w, h, d, r = 0.02) => { const k = `${w}|${h}|${d}|${r}`; let g = gcache.get(k); if (!g) { g = new RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2.1, h / 2.1, d / 2.1)); gcache.set(k, g); } return g; };
@@ -111,6 +112,7 @@ export class Character {
       for (let i = 0; i < 3; i++) { const seg = this.mesh(RB(0.16, 0.05, 0.3, 0.02), new THREE.MeshStandardMaterial({ color: this.skin.accent, emissive: this.skin.accent, emissiveIntensity: 0.6, roughness: 0.7 }), this.scarf, 0, -i * 0.01, -0.15 - i * 0.28, false); seg.rotation.x = 0; }
     }
     this.optimize();
+    buildExtras(this);
     this.tmpMat = new THREE.Matrix4();
   }
 
@@ -169,6 +171,7 @@ export class Character {
   }
 
   setTeamColor(hex) {
+    this.teamHex = hex;
     if (hex == null) this.mAccent.color.set(this.skin.accent).multiplyScalar(1.5);
     else this.mAccent.color.set(hex).multiplyScalar(1.8);
   }
@@ -330,6 +333,8 @@ export class Character {
         this.armL.up.quaternion.identity(); this.armL.up.rotation.set(0.2 + run * 0.4 * Math.sin(this.phase), 0, 0.15); this.armL.fo.rotation.set(-0.5, 0, 0);
       }
     }
+    // Seltene Skins: Extras animieren
+    if (this.skin.extras) tickExtras(this, dt, speed);
     // Schal
     if (this.scarf) { this.scarfLag += (clamp(speed / 8, 0, 1) - this.scarfLag) * Math.min(1, dt * 4); this.scarf.rotation.x = -0.3 * this.scarfLag + Math.sin(performance.now() * 0.006) * 0.05 + (grounded ? 0 : 0.35); }
     // Muzzle flash Skalierung / Klinge
@@ -337,5 +342,5 @@ export class Character {
   }
 
   getMuzzleWorld(out) { this.weaponGroup.userData.muzzle.getWorldPosition(out); return out; }
-  dispose() { this.root.traverse(o => { if (o.isMesh && o.material && o.material.dispose && (o.material === this.mAccent)) { /* geteilte Geo nicht freigeben */ } }); }
+  dispose() { disposeExtras(this); }
 }

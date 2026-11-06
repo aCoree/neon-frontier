@@ -22,11 +22,15 @@ function mats(skin) {
   matCache.set(k, m); return m;
 }
 const glowMat = (hex, k = 2.2) => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false }); m.userData.merge = 'glow'; return m; };
-const litVC = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.65, roughness: 0.45 });
+const litCache = new Map();   // pro Waffen-Skin ein Material: Metall/Glanz unterscheiden sich (Gold = spiegelnd, Carbon = matt …)
+const litFor = (skin) => { let m = litCache.get(skin.id); if (!m) { m = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: skin.metal ?? 0.65, roughness: skin.rough ?? 0.45 }); litCache.set(skin.id, m); } return m; };
+// Animierte Skins: gemeinsame Materialien, deren Farbe pro Frame gesetzt wird (siehe tickWeaponFx)
+const HUE_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), SHIM_MAT = new THREE.MeshBasicMaterial({ color: 0xffc94a, toneMapped: false });
+export function tickWeaponFx(t) { HUE_MAT.color.setHSL((t * 0.12) % 1, 0.85, 0.62).multiplyScalar(2); SHIM_MAT.color.setHSL(0.09 + 0.03 * Math.sin(t * 3), 1, 0.55 + 0.12 * Math.sin(t * 5.5)).multiplyScalar(2.2); }
 const glowVC = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
 const bakeCache = new Map();
 // Statische Teile (gleiche Materialklasse) zu je einem Mesh zusammenfassen; bewegliche Teile (Magazin, Pumpe, Riegel, Klinge) und Sondermaterialien bleiben einzeln.
-function bake(g, key) {
+function bake(g, key, skin) {
   const keep = new Set([g.userData.magMesh, g.userData.pump, g.userData.bolt, g.userData.blade]);
   const lit = [], glow = [];
   for (const m of g.children) { if (!m.isMesh || keep.has(m)) continue; const k = m.material.userData.merge; if (k === 'lit') lit.push(m); else if (k === 'glow') glow.push(m); }
@@ -36,7 +40,7 @@ function bake(g, key) {
     c = { lit: make(lit), glow: make(glow) }; bakeCache.set(key, c);
   }
   for (const m of [...lit, ...glow]) g.remove(m);
-  if (c.lit) { const m = new THREE.Mesh(c.lit, litVC); m.castShadow = true; g.add(m); }
+  if (c.lit) { const m = new THREE.Mesh(c.lit, litFor(skin)); m.castShadow = true; g.add(m); }
   if (c.glow) { const m = new THREE.Mesh(c.glow, glowVC); g.add(m); }
 }
 
@@ -45,7 +49,7 @@ export function makeWeaponModel(id, wskinId = 'default') {
   const skin = WSKINS.find(w => w.id === wskinId) || WSKINS[0];
   const M = mats(skin);
   const accHex = skin.glow ?? def.color;
-  const acc = glowMat(accHex);
+  const hueSkin = (skin.fx || []).includes('hue'), acc = hueSkin ? HUE_MAT : glowMat(accHex);
   const g = new THREE.Group(); g.name = id;
   const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = true; g.add(m); return m; };
   const mk = (name, x, y, z) => { const o = new THREE.Object3D(); o.position.set(x, y, z); g.add(o); g.userData[name] = o; return o; };
@@ -118,8 +122,21 @@ export function makeWeaponModel(id, wskinId = 'default') {
   }
   g.userData.mag = g.userData.mag || null; g.userData.magMesh = mag; g.userData.pump = pump; g.userData.bolt = bolt; g.userData.def = def;
   g.userData.muzzleLight = null;
-  bake(g, id + '|' + wskinId);
+  decorate(g, skin, acc, g.children[0]);
+  bake(g, id + '|' + wskinId, skin);
   return g;
+}
+
+// Seltene Waffen-Skins bekommen Zusatzdetails: Leuchtstreifen, Energiekern, Mündungsringe, schimmernde Flächen (relativ zum Hauptkörper)
+function decorate(g, skin, acc, base) {
+  const fx = skin.fx; if (!fx || !fx.length || !base || !base.geometry?.parameters) return;
+  const { width: w, height: h, depth: d } = base.geometry.parameters, p = base.position; if (!(w > 0 && h > 0 && d > 0)) return;
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); g.add(m); return m; };
+  if (fx.includes('strip')) { add(rbox(0.012, 0.01, d * 0.78, 0.004), acc, p.x, p.y + h / 2 + 0.003, p.z); add(rbox(0.01, h * 0.28, d * 0.6, 0.004), acc, p.x + w / 2 + 0.002, p.y - h * 0.12, p.z); add(rbox(0.01, h * 0.28, d * 0.6, 0.004), acc, p.x - w / 2 - 0.002, p.y - h * 0.12, p.z); }
+  if (fx.includes('core')) add(rbox(w + 0.008, h * 0.42, 0.034, 0.006), acc, p.x, p.y, p.z - d * 0.12);
+  const mz = g.userData.muzzle; 
+  if (fx.includes('ring') && mz) { for (let i = 0; i < 2; i++) add(tor(0.034 + i * 0.006, 0.0065), acc, mz.position.x, mz.position.y, mz.position.z - 0.07 - i * 0.05, 0, Math.PI / 2, 0); }
+  if (fx.includes('shimmer')) { add(rbox(w * 0.5, 0.008, d * 0.92, 0.003), SHIM_MAT, p.x, p.y - h / 2 - 0.002, p.z); add(rbox(0.008, 0.008, d * 0.85, 0.003), SHIM_MAT, p.x + w * 0.22, p.y + h / 2 + 0.004, p.z); add(rbox(0.008, 0.008, d * 0.85, 0.003), SHIM_MAT, p.x - w * 0.22, p.y + h / 2 + 0.004, p.z); }
 }
 
 // Halte-Pose pro Waffenklasse (relativ zur Brust): Position, Rotation

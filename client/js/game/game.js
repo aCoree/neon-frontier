@@ -1,11 +1,13 @@
 // Haupt-Spiellogik im Client: Zustand, Netzwerk-Events, Entitäten, Effekte, Schleife.
 import * as THREE from 'three';
-import { WEAPONS, MODES, TEAMS, FL, GADGETS, THROWABLES, CONSUMABLES, xpForLevel, SKINS, AMMO, EMOTES } from '../shared/defs.js';
+import { WEAPONS, MODES, TEAMS, FL, GADGETS, THROWABLES, CONSUMABLES, xpForLevel, SKINS, AMMO, EMOTES, RARITY } from '../shared/defs.js';
 import { World, rayCylinder } from '../shared/world.js';
 import { moverY, zoneAt } from '../shared/mapdata.js';
 import { clamp, lerp, angDiff } from '../shared/util.js';
 import { Character } from '../render/character.js';
 import { Input } from './input.js';
+import { TouchControls, isTouchDevice } from './touch.js';
+import { tickWeaponFx, makeWeaponModel } from '../render/weapons.js';
 import { LocalPlayer } from './player.js';
 import { Combat } from './combat.js';
 import { Net, LocalNet, resolveServerUrl } from './net.js';
@@ -23,6 +25,7 @@ export class Game {
     this.engine = engine; this.scene = engine.scene; this.camera = engine.camera; this.world = engine.world; this.map = engine.map; this.view = engine.view;
     this.fx = new FX(this.scene, this.camera, engine.renderer); this.view.fx = this.fx;
     this.input = new Input(canvas); this.audio = audio;
+    if (isTouchDevice()) { this.input.touch = true; document.body.classList.add('touch'); this.touch = new TouchControls(this.input, this); }
     this.settings = Progress.d.settings;
     this.mode = 'menu'; this.ui = null; this.net = null; this.ents = new Map(); this.you = null; this.lobby = null; this.roomCode = null; this.isHost = false; this.inMatch = false;
     this.pickups = new PickupView(this.scene); this.drones = new DroneView(this.scene); this.emotes = new EmoteView(this.scene);
@@ -133,7 +136,7 @@ export class Game {
     this.char = new Character(me?.skin || Progress.d.skin, me?.wskin || Progress.d.wskin); this.scene.add(this.char.root); this.char.root.visible = false;
     if (me && me.team >= 0) this.char.setTeamColor(TEAMS[me.team].hex);
     this.char.setWeapon('viper'); this.char.equipT = 1; this.myTeam = me ? me.team : -1;
-    if (this.menuChar) this.menuChar.root.visible = false; this.partyCharsVisible(false);
+    if (this.menuChar) this.menuChar.root.visible = false; this.partyCharsVisible(false); if (this.weaponShow) this.weaponShow.visible = false; if (this.pedestal) this.pedestal.visible = false; this.skinPreview = null;
   }
   clearTransient() {
     for (const p of this.projs) this.scene.remove(p.mesh); this.projs = []; this.smokes = []; for (const s of this.supplies) this.scene.remove(s.g); this.supplies = [];
@@ -484,21 +487,52 @@ export class Game {
     this.view.updateLOD(new THREE.Vector3(MENU_POS.x, 0, MENU_POS.z), true);
   }
   ensureMenuChar() {
-    const d = this.menuOverride || Progress.d;
-    if (this.menuChar && (this.menuChar.skin.id !== d.skin || this.menuChar.wskinId !== d.wskin)) { this.scene.remove(this.menuChar.root); this.menuChar = null; }
+    const d = this.skinPreview || this.menuOverride || Progress.d, wid = this.skinPreview?.weapon || Progress.d.menuWeapon || 'striker';
+    if (this.menuChar && (this.menuChar.skin.id !== d.skin || this.menuChar.wskinId !== d.wskin)) { this.scene.remove(this.menuChar.root); this.menuChar.dispose(); this.menuChar = null; }
     if (!this.menuChar) {
       this.menuChar = new Character(d.skin, d.wskin); this.scene.add(this.menuChar.root);
-      this.menuChar.setWeapon(Progress.d.menuWeapon || 'striker'); this.menuChar.equipT = 1;
+      this.menuChar.setWeapon(wid); this.menuChar.equipT = 1;
       this.menuChar.root.position.set(MENU_POS.x, MENU_POS.y, MENU_POS.z); this.menuChar.root.rotation.y = Math.PI;
     }
   }
-  refreshMenuChar() { if (this.menuChar) { this.scene.remove(this.menuChar.root); this.menuChar = null; } this.ensureMenuChar(); this.menuChar.root.visible = this.mode === 'menu'; }
-  setMenuView(m) { this.menuMode = m; }
+  refreshMenuChar() { if (this.menuChar) { this.scene.remove(this.menuChar.root); this.menuChar.dispose(); this.menuChar = null; } this.ensureMenuChar(); this.menuChar.root.visible = this.mode === 'menu' && !(this.skinPreview && this.skinPreview.type === 'wskin'); }
+  setMenuView(m) { this.menuMode = m; if (m === 'skins') { this.menuYaw = this.menuYaw ?? 0.5; this.menuPitch = this.menuPitch ?? 0.05; this.menuZoom = this.menuZoom ?? 1; this.menuIdleAt = 0; } }
+  // Shop-Vorschau: { type: 'skin'|'wskin', skin, wskin, weapon } – zeigt (auch ungekaufte) Skins in 360° ohne sie auszurüsten
+  setSkinPreview(p) {
+    this.skinPreview = p || null; this.refreshMenuChar(); this.syncWeaponShow(); this.syncPedestal();
+  }
+  // Waffen-Skins werden als große, frei drehbare Waffe gezeigt (ohne Charakter)
+  syncWeaponShow() {
+    const sp = this.skinPreview, show = !!sp && sp.type === 'wskin' && this.mode === 'menu';
+    if (this.menuChar) this.menuChar.root.visible = this.mode === 'menu' && !show;
+    if (!show) { if (this.weaponShow) this.weaponShow.visible = false; return; }
+    const key = sp.weapon + '|' + sp.wskin;
+    if (this.weaponShowKey !== key) {
+      if (this.weaponShow) this.scene.remove(this.weaponShow);
+      const g = makeWeaponModel(sp.weapon, sp.wskin), root = new THREE.Group(); root.add(g); root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root), c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+      g.position.sub(c); const k = 1.45 / Math.max(sz.z, sz.x, 0.4); const wrap = new THREE.Group(); wrap.add(root); wrap.scale.setScalar(k); wrap.userData.k = k;
+      this.scene.add(wrap); this.weaponShow = wrap; this.weaponShowKey = key;
+    }
+    this.weaponShow.visible = true;
+  }
+  // Podest mit Rahmen in der Seltenheits-Farbe
+  syncPedestal() {
+    if (!this.pedestal) {
+      const g = new THREE.Group(), base = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.05, 0.07, 48), new THREE.MeshStandardMaterial({ color: 0x10151f, metalness: 0.8, roughness: 0.35 }));
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, transparent: true, opacity: 0.95 }), ring = new THREE.Mesh(new THREE.RingGeometry(0.88, 0.96, 64).rotateX(-Math.PI / 2), ringMat);
+      ring.position.y = 0.045; base.position.y = 0.0; g.add(base, ring); g.userData.ring = ringMat; this.scene.add(g); this.pedestal = g;
+    }
+    const sp = this.skinPreview, def = sp ? (sp.type === 'skin' ? SKINS.find(s => s.id === sp.skin) : null) : null;
+    this.pedestal.userData.ring.color.set(RARITY[def?.rarity || 'common'].color).multiplyScalar(1.6);
+    this.pedestal.position.set(MENU_POS.x, MENU_POS.y + 0.0, MENU_POS.z);
+    this.pedestal.visible = this.mode === 'menu' && this.menuMode === 'skins' && !!sp && sp.type === 'skin';
+  }
   // Party-Mitglieder stehen im Hauptmenü neben dir (wie bei Fortnite); Skin und Waffe stammen vom Server-Zustand der Party
   syncPartyChars(p) {
     this.partyChars = this.partyChars || new Map(); const want = new Map();
     if (p) { let i = 0; for (const m of p.members) if (!m.you) { want.set(m.name, { m, slot: i++ }); } }
-    for (const [name, c] of [...this.partyChars]) { const w = want.get(name); if (!w || c.skin !== w.m.skin || c.wskin !== w.m.wskin) { this.scene.remove(c.char.root); this.scene.remove(c.plate); c.plate.material.map.dispose(); c.plate.material.dispose(); this.partyChars.delete(name); } }
+    for (const [name, c] of [...this.partyChars]) { const w = want.get(name); if (!w || c.skin !== w.m.skin || c.wskin !== w.m.wskin) { this.scene.remove(c.char.root); c.char.dispose(); this.scene.remove(c.plate); c.plate.material.map.dispose(); c.plate.material.dispose(); this.partyChars.delete(name); } }
     for (const [name, w] of want) {
       let c = this.partyChars.get(name);
       if (!c) { const ch = new Character(w.m.skin, w.m.wskin); ch.setWeapon(['viper', 'striker', 'hornet'][w.slot % 3]); ch.equipT = 1; this.scene.add(ch.root); c = { char: ch, skin: w.m.skin, wskin: w.m.wskin, plate: this.partyPlate(name, w.m.leader) }; this.scene.add(c.plate); this.partyChars.set(name, c); }
@@ -519,7 +553,7 @@ export class Game {
 
   // =================== Frame ===================
   frame(dt) {
-    this.t += dt;
+    this.t += dt; if (this.touch) this.touch.update(); tickWeaponFx(this.t);
     const eng = this.engine, now = performance.now() / 1000;
     this.fx.fogD = eng.scene.fog.density; this.fx.density = eng.partDensity;
     if (this.mode === 'menu') { this.updateMenu(dt); }
@@ -549,10 +583,12 @@ export class Game {
   }
   updateMenu(dt) {
     this.menuT += dt; const mc = this.menuChar; if (!mc) return;
+    if (this.pedestal) this.pedestal.visible = this.menuMode === 'skins' && !!this.skinPreview && this.skinPreview.type === 'skin';
+    const nowS = performance.now() / 1000; if (this.menuMode === 'skins' && nowS > (this.menuIdleAt || 0)) this.menuYaw += dt * 0.5;   // ohne Eingabe dreht sich die Vorschau langsam
     mc.update(dt, { speed: 0, grounded: true, pitch: 0 }); this.updatePartyChars(dt);
     const target = new THREE.Vector3(MENU_POS.x, MENU_POS.y + (this.menuMode === 'skins' ? 1.0 : 1.25), MENU_POS.z);
     let a, dist, h;
-    if (this.menuMode === 'skins') { a = this.menuT * 0.5 + 0.3; dist = 3.2; h = 1.35; mc.root.rotation.y = 0; }
+    if (this.menuMode === 'skins') { a = this.menuYaw; dist = 3.3 * this.menuZoom; h = 1.2 + this.menuPitch * dist * 0.9; mc.root.rotation.y = 0; }
     else { a = Math.sin(this.menuT * 0.12) * 0.5 - 0.25; dist = 4.3; h = 1.45; mc.root.rotation.y = -0.45; }
     const off = this.menuMode === 'skins' ? 0.0 : 0.0;
     const side = this.menuMode === 'skins' ? -0.85 : -1.3;
@@ -560,11 +596,17 @@ export class Game {
     this.camera.lookAt(target.x + Math.cos(a) * -side * 0.0, target.y - 0.05, target.z);
     // Seitlicher Versatz, damit der Charakter rechts vom Menü steht
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right, side); this.camera.lookAt(target.clone().addScaledVector(right, side * 0.5));
+    if (this.weaponShow?.visible) {   // Waffen-Vorschau: Kamera fest, Waffe dreht sich (Ziehen = drehen/kippen, Rad = Zoom)
+      const ws = this.weaponShow, k = ws.userData.k || 1, tg = new THREE.Vector3(MENU_POS.x, MENU_POS.y + 1.35, MENU_POS.z);
+      ws.position.copy(tg); ws.rotation.set(this.menuPitch * 1.6, this.menuYaw + Math.PI / 2, 0);
+      const dd = 3.0 * this.menuZoom; this.camera.position.set(tg.x, tg.y + 0.1, tg.z + dd); this.camera.lookAt(tg.x, tg.y, tg.z);
+      const right2 = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion); this.camera.position.addScaledVector(right2, -0.95 * this.menuZoom); this.camera.lookAt(tg.clone().addScaledVector(right2, -0.95 * this.menuZoom));
+    }
     this.audio.updateListener(this.camera.position, 0);
   }
   // B halten → Emote-Rad; Zifferntasten 1–8 wählen (die Ziffern werden dabei NICHT als Waffenwechsel gezählt)
   updateEmoteInput() {
-    const inp = this.input, want = !!(this.alive && this.ctrl && Account.flags.emotes !== false && inp.down('KeyB') && !this.ui.chatOpen);
+    const inp = this.input, want = !!(this.alive && this.ctrl && Account.flags.emotes !== false && (inp.down('KeyB') || this.touchEmote) && !this.ui.chatOpen);
     if (want !== !!this.emoteOpen) { this.emoteOpen = want; this.ui.emoteWheel(want); }
     if (!want) return;
     for (let i = 0; i < EMOTES.length; i++) { const code = 'Digit' + (i + 1); if (inp.hit(code)) { inp.pressed.delete(code); this.ui.sendEmote(i); } }

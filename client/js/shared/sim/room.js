@@ -11,6 +11,9 @@ const r2 = (v) => Math.round(v * 100) / 100;
 const clean = (s, n = 16) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
 let idc = 1;
 export const FALL_SAFE = 5.5, FALL_DMG_PER_M = 7, FALL_LAUNCH_VY = 10.5;   // Meter ohne Schaden · Schaden pro weiterem Meter (≈ 24 m = tödlich) · Start-Tempo ab dem es ein Katapult ist
+// Bewegungsprüfung (serverseitig): Tempo-Budget statt starrem Limit. Erlaubte Geschwindigkeit hängt vom Zustand ab, den der SERVER kennt
+// (Speed-Boost, Dash-Abklingzeit, Gadget im Besitz, Sprungplatte in der Nähe, kürzlich Schaden erlitten). Teleports gelten nur an erlaubten Zielen.
+export const MOVE = { base: 9.6, boost: 12.6, dash: 21, grapple: 33, jet: 19, pad: 30, hurt: 24, bucket: 1.5, slack: 0.6, up: 13, upPad: 34, upJet: 16, airMax: 9 };
 export const MAX_WEAPONS = 5;   // Plätze: Viper + Klinge + 3 gefundene Waffen
 const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr', 'drop', 'lowgrav', 'supply', 'supplyland', 'toast', 'join', 'leave', 'spawn', 'drone']);
 
@@ -274,7 +277,7 @@ export class Room {
     if (this.settings.training) { e.cons = { medkit: 4, shieldpot: 4, grenade: 5, smoke: 4 }; }
     e.hist.length = 0; e.streak = 0; e.lastDmgFrom = null; e.assists = {};
     if (e.isBot) this.bots.onSpawn(e);
-    e.fall = null; this.emit({ k: 'spawn', id: e.id, x: r2(e.x), y: r2(e.y), z: r2(e.z), yaw: r2(e.yaw), first: first ? 1 : 0 });
+    e.fall = null; this.allowTp(e, e.x, e.y, e.z, 6, 5); this.emit({ k: 'spawn', id: e.id, x: r2(e.x), y: r2(e.y), z: r2(e.z), yaw: r2(e.yaw), first: first ? 1 : 0 });
     if (e.member) this.sendInv(e);
   }
   killSilently(e) { e.alive = false; }
@@ -291,9 +294,10 @@ export class Room {
     const x = +s.x, y = +s.y, z = +s.z;
     if (!isFinite(x + y + z)) return;
     const dt = Math.max(0.02, this.T - e.lastSt); e.lastSt = this.T;
-    const d = Math.hypot(x - e.x, z - e.z);
-    if (this.state === 'playing' && !s.tp && d > Math.max(3, 40 * dt) && e.hist.length) { this.send(m, { k: 'fix', x: r2(e.x), y: r2(e.y), z: r2(e.z) }); this.hooks?.suspicious?.(m, 'movement', `dist=${d.toFixed(1)} dt=${dt.toFixed(2)}`); return; }
+    let d = Math.hypot(x - e.x, z - e.z);
+    if (this.state === 'playing' && !this.checkMove(m, e, s, x, y, z, d)) return;
     if (this.state === 'countdown') return;
+    if (e.mv?.tpAccepted) { e.mv.tpAccepted = false; d = 0; }
     e.vx = (x - e.x) / dt; e.vz = (z - e.z) / dt; e.vy = (y - e.y) / dt;
     e.x = clamp(x, -196, 196); e.y = clamp(y, -60, 200); e.z = clamp(z, -196, 196);
     e.yaw = +s.yaw || 0; e.pitch = clamp(+s.pitch || 0, -1.6, 1.6);
@@ -303,6 +307,45 @@ export class Room {
     this.trackFall(e, fl, d, s.tp);
     if (e.y < -40) this.damage(e, 9999, e, { w: 'fall' });
   }
+  // Liefert false, wenn die Bewegung unplausibel ist (dann bekommt der Client ein 'fix' und wird zurückgesetzt).
+  checkMove(m, e, s, x, y, z, d) {
+    const T = this.T, mv = e.mv || (e.mv = { t: T, bud: 0, vb: 0, air: 0, dashReady: 0, dashUntil: 0, padUntil: 0, grapUntil: 0, jetUntil: 0, hurtUntil: 0, grants: [], beacon: null, viol: 0, violT: T, reported: 0 });
+    const el = clamp(T - mv.t, 0, 4); mv.t = T; mv.grants = mv.grants.filter(g => g.until > T);
+    const fl = (s.fl | 0), dy = y - e.y;
+    // Teleport nur an vom Server erlaubten Zielen: Spawn/Fix, Teleporter-Anker, Karten-Portale (Quelle in der Nähe)
+    if (s.tp) {
+      let ok = mv.grants.some(g => Math.hypot(x - g.x, z - g.z) <= g.r && Math.abs(y - g.y) <= g.r + 3);
+      if (!ok) for (const t of this.map.tele) if (Math.hypot(e.x - t.x, e.z - t.z) < 3.8 && Math.abs(e.y - t.y) < 3 && Math.hypot(x - t.to.x, z - t.to.z) < 3.8 && Math.abs(y - t.to.y) < 3.5) { ok = true; break; }
+      if (ok) { mv.bud = 0; mv.vb = 0; mv.air = 0; mv.tpAccepted = true; mv.grants.length = 0; return true; }
+    }
+    // Zustände, die höheres Tempo rechtfertigen (alle vom Server geprüft, nicht vom Client behauptet)
+    if ((fl & FL.DASH) && T >= mv.dashReady) { mv.dashUntil = T + 0.5; mv.dashReady = T + PLAYER.dashCd * 0.7; }
+    if ((fl & FL.GRAPPLE) && e.gadget === 'grapple') mv.grapUntil = T + 1.0;
+    if ((fl & FL.JET) && e.gadget === 'jetpack') mv.jetUntil = T + 1.0;
+    for (const p of this.map.pads) if (Math.abs(p.y - e.y) < 2.5 && Math.hypot(p.x - e.x, p.z - e.z) < p.r + 2.2) { mv.padUntil = T + 3.2; break; }
+    let vmax = (e.power.speed || 0) > T ? MOVE.boost : MOVE.base, vup = MOVE.up;
+    if (T < mv.dashUntil) vmax = Math.max(vmax, MOVE.dash);
+    if (T < mv.jetUntil) { vmax = Math.max(vmax, MOVE.jet); vup = MOVE.upJet; }
+    if (T < mv.grapUntil) { vmax = Math.max(vmax, MOVE.grapple); vup = MOVE.upPad; }
+    if (T < mv.padUntil) { vmax = Math.max(vmax, MOVE.pad); vup = MOVE.upPad; }
+    if (T < mv.hurtUntil) vmax = Math.max(vmax, MOVE.hurt);
+    mv.bud = Math.min(vmax * MOVE.bucket, mv.bud + vmax * el) - d;
+    mv.vb = Math.min(vup * MOVE.bucket, mv.vb + vup * el) - Math.max(0, dy);
+    // Fliegen: dauerhaft in der Luft ohne Jetpack/Enterhaken/Sprungplatte
+    const gap = y - this.world.groundAt(x, z, y + 0.6);
+    if (gap > 1.3 && T >= mv.jetUntil && T >= mv.grapUntil && T >= mv.padUntil) mv.air += el; else if (gap <= 1.3) mv.air = 0;
+    const down = -dy > 52 * Math.max(el, 0.05) + 3;
+    const why = mv.bud < -MOVE.slack ? 'speed' : mv.vb < -MOVE.slack ? 'climb' : mv.air > MOVE.airMax ? 'fly' : down ? 'drop' : null;
+    if (!why) return true;
+    // Zurücksetzen (Rubber-Band); wiederholte Verstöße werden gemeldet
+    mv.bud = 0; mv.vb = 0; mv.air = 0; mv.grants.push({ x: e.x, y: e.y, z: e.z, r: 5, until: T + 2.5 });
+    this.send(m, { k: 'fix', x: r2(e.x), y: r2(e.y), z: r2(e.z) });
+    if (T - mv.violT > 3) mv.viol = Math.max(0, mv.viol - 1); mv.violT = T; mv.viol++;
+    if (mv.viol >= 6 && T - mv.reported > 20) { mv.reported = T; this.hooks?.suspicious?.(m, 'movement', `${why} dist=${d.toFixed(1)} dy=${dy.toFixed(1)} v=${mv.viol}`); }
+    return false;
+  }
+  // Server-seitig erlaubte Teleport-Ziele (Spawn, Fix, Teleporter-Anker)
+  allowTp(e, x, y, z, r = 5, secs = 4) { const mv = e.mv || (e.mv = { t: this.T, bud: 0, vb: 0, air: 0, dashReady: 0, dashUntil: 0, padUntil: 0, grapUntil: 0, jetUntil: 0, hurtUntil: 0, grants: [], beacon: null, viol: 0, violT: this.T, reported: 0 }); mv.grants.push({ x, y, z, r, until: this.T + secs }); mv.t = this.T; mv.bud = 0; mv.vb = 0; mv.air = 0; }
   // Fallschaden – serverseitig aus der Bewegung abgeleitet (Luftphase, höchster Punkt, Landehöhe); der Client kann ihn nicht abschalten.
   // Kein Schaden bei: Jetpack, Enterhaken, Niedrig-Schwerkraft, Sprungplatten/Starts (Aufwärtstempo > Sprung), Teleport, Wasser, Training.
   trackFall(e, fl, d, tp) {
@@ -503,6 +546,7 @@ export class Room {
     if (v.spawnInv > this.T && info.w !== 'fall' && !this.settings.training) return 0;
     if (v.dcInvuln && info.w !== 'fall') return 0;
     if (v.dummy && info.w === 'fall') return 0;
+    if (v.mv && info.w !== 'fall') v.mv.hurtUntil = this.T + 1.2;   // Rückstoß/Explosion erlaubt kurz höheres Tempo
     amt = Math.max(0, amt); let rem = amt;
     if (v.barrierUntil > this.T && v.barrier > 0) { const ab = Math.min(v.barrier, rem); v.barrier -= ab; rem -= ab; if (v.barrier <= 0) { v.barrierUntil = 0; this.sendInv(v); } }
     const sd = Math.min(v.shield, rem); v.shield -= sd; rem -= sd; v.hp -= rem;
@@ -698,7 +742,11 @@ export class Room {
     const g = GADGETS[e.gadget], now = this.T;
     if ((e.gadCd[e.gadget] || 0) > now && msg.t !== 'teleback') return;
     if (e.gadget === 'grapple' && msg.t === 'hook') { e.gadCd.grapple = now + g.cd; this.emit({ k: 'gad', id: e.id, t: 'grapple', p: [r2(+msg.p[0]), r2(+msg.p[1]), r2(+msg.p[2])] }); }
-    else if (e.gadget === 'teleporter' && (msg.t === 'tele' || msg.t === 'teleback')) { if (msg.t === 'teleback') e.gadCd.teleporter = now + g.cd; this.emit({ k: 'gad', id: e.id, t: msg.t, p: [r2(+msg.p[0]), r2(+msg.p[1]), r2(+msg.p[2])] }); }
+    else if (e.gadget === 'teleporter' && (msg.t === 'tele' || msg.t === 'teleback')) {
+      const mv = e.mv || (this.allowTp(e, e.x, e.y, e.z, 1, 0.1), e.mv);
+      if (msg.t === 'tele') { const p = (msg.p || []).map(Number); if (p.length === 3 && p.every(isFinite) && Math.hypot(p[0] - e.x, p[2] - e.z) < 6 && Math.abs(p[1] - e.y) < 6) mv.beacon = { x: p[0], y: p[1], z: p[2] }; else return; }
+      else { if (!mv.beacon) return; this.allowTp(e, mv.beacon.x, mv.beacon.y, mv.beacon.z, 3.5, 3); mv.beacon = null; }
+      if (msg.t === 'teleback') e.gadCd.teleporter = now + g.cd; this.emit({ k: 'gad', id: e.id, t: msg.t, p: [r2(+msg.p[0]), r2(+msg.p[1]), r2(+msg.p[2])] }); }
     else if (e.gadget === 'scanner' && msg.t === 'scan') {
       e.gadCd.scanner = now + g.cd;
       const list = []; for (const t of this.ents.values()) if (t !== e && t.alive && this.isEnemy(e, t) && Math.hypot(t.x - e.x, t.z - e.z) < 48) list.push(t.id);

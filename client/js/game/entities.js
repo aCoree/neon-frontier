@@ -100,7 +100,7 @@ export class RemoteEnt {
     if (cast !== this.cast) { this.cast = cast; this.root.traverse(o => { if (o.isMesh) o.castShadow = cast; }); }
   }
   setVisible(v) { this.visible = v; this.root.visible = v; }
-  dispose() { this.scene.remove(this.root); this.scene.remove(this.plate); this.ptex.dispose(); }
+  dispose() { this.scene.remove(this.root); this.scene.remove(this.plate); this.ptex.dispose(); this.char?.dispose?.(); }
 }
 
 // --------- Pickup-Ansichten ---------

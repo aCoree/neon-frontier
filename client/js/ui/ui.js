@@ -1,5 +1,6 @@
 // Benutzeroberfläche: Menüs, Lobby, HUD, Ergebnis, Einstellungen, Skins, Erfolge.
-import { EMOTES, EMOTE_COOLDOWN, CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel } from '../shared/defs.js';
+import { EMOTES, EMOTE_COOLDOWN, CATALOG_BY_ID, MODES, TEAMS, DIFFS, SKINS, WSKINS, WEAPONS, WEAPON_IDS, ACHIEVEMENTS, CONSUMABLES, GADGETS, POWERUPS, AMMO, xpForLevel, itemLabel, RARITY, SEASON_TIERS } from '../shared/defs.js';
+import { skinThumb, wskinThumb } from '../render/thumbs.js';
 import { Progress } from '../game/progress.js';
 import { audio } from '../game/audio.js';
 import { QUALITY } from '../render/engine.js';
@@ -24,7 +25,8 @@ export class UI {
     const g = this.g; this.wireSocial(); this.map = new BigMap(g);
     $('#tab-play').onclick = () => { audio.click(); this.showScreen('menu'); };
     $('#find').onclick = () => this.findClick();
-    $('#h-season').onclick = $('#h-board').onclick = () => { audio.click(); if (Account.user) this.go('season'); else this.go('login'); };
+    $('#h-season').onclick = () => { audio.click(); if (Account.user) this.go('season'); else this.go('login'); };
+    $('#h-board').onclick = () => { audio.click(); this.go('board'); };
     $('#hr-switch').onclick = (e) => { e.stopPropagation(); audio.click(); Progress.d.settings.mmRanked = !Progress.d.settings.mmRanked; Progress.save(); this.renderHome(); };
     document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && this.cur === 'menu' && !$('#dlg').classList.contains('show') && !/INPUT|TEXTAREA|BUTTON|SELECT|A/.test(e.target?.tagName || '')) { e.preventDefault(); this.findClick(); } });
     $('#pp-leave').onclick = async () => { if (await this.confirm({ title: 'Party verlassen?', lines: ['Du verlässt die Party.'], ok: 'Verlassen', danger: true })) { const r = await Social.cmd({ k: 'party_leave' }); if (!r.ok) this.toast(r.error, 'bad'); } };
@@ -79,7 +81,9 @@ export class UI {
     $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; if (name) $('#' + (name === 'hud' ? 'hud' : 's-' + name)).classList.add('show');
     if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); this.loadHome(); }
-    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
+    if (name !== 'skins' && this.g.skinPreview) this.g.setSkinPreview(null);
+    if (name === 'skins') { this.g.setMenuView('skins'); this.openShop(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
+    if (name === 'board') this.openBoard();
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
@@ -101,7 +105,9 @@ export class UI {
     const modal = name === 'name' || name === 'help';
     if (!modal) $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; $('#s-' + name).classList.add('show');
-    if (name === 'skins') { this.g.setMenuView('skins'); this.refreshSkins(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
+    if (name !== 'skins' && this.g.skinPreview) this.g.setSkinPreview(null);
+    if (name === 'skins') { this.g.setMenuView('skins'); this.openShop(); if (Account.user) Account.loadInventory().then(() => this.refreshSkins()); }
+    if (name === 'board') this.openBoard();
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
@@ -235,9 +241,12 @@ export class UI {
     info.append(rn, sm, bar, tiers); rb.append(badge, info); rb.title = 'Rangpunkte gibt es nur in Ranked-Matches (Spielen → Match suchen → Ranked AN) mit mindestens 2 echten Spielern: Sieg +25 bis +40, Niederlage bis −15.';
     // Statistiken
     const losses = Math.max(0, s.matches - s.wins), wr = s.matches ? Math.round(100 * s.wins / s.matches) + ' %' : '–', hs = s.kills ? Math.round(100 * s.headshots / s.kills) + ' %' : '–';
-    const grid = $('#pf-stats'); for (const [v, l] of [[s.matches, 'Matches'], [s.wins, 'Siege'], [losses, 'Niederlagen'], [wr, 'Siegquote'], [s.kd, 'K/D'], [s.kills, 'Kills'], [s.deaths, 'Tode'], [s.headshots, 'Kopftreffer'], [hs, 'HS-Quote']]) { const c = document.createElement('div'); c.className = 'pf-st'; const b = document.createElement('b'); b.textContent = v; const sg = document.createElement('small'); sg.textContent = l; c.append(b, sg); grid.appendChild(c); }
-    const gear = $('#pf-gear'); gear.replaceChildren(); for (const [l, v] of [['Charakter', sk.name], ['Waffen-Skin', ws.name]]) { const d = document.createElement('div'); const sg = document.createElement('small'); sg.textContent = l; const b = document.createElement('b'); b.textContent = v; d.append(sg, b); gear.appendChild(d); }
-    if (self) { try { const se = await Account.season(); if (se.enabled && this.cur === 'profile') { const d = document.createElement('div'); const sg = document.createElement('small'); sg.textContent = 'Season'; const b = document.createElement('b'); b.textContent = se.me.points + ' Punkte' + (se.me.position ? ' · Platz ' + se.me.position : ''); d.append(sg, b); gear.appendChild(d); } } catch { /* optional */ } }
+    const grid = $('#pf-stats'); grid.replaceChildren();
+    for (const [v, l, big] of [[s.kd, 'K/D', 1], [wr, 'Siegquote', 1], [s.matches, 'Matches', 1], [s.wins, 'Siege'], [losses, 'Niederlagen'], [s.kills, 'Kills'], [s.deaths, 'Tode'], [s.headshots, 'Kopftreffer'], [hs, 'HS-Quote']]) { const c = document.createElement('div'); c.className = 'pf-st' + (big ? ' big' : ''); const b = document.createElement('b'); b.textContent = v; const sg = document.createElement('small'); sg.textContent = l; c.append(b, sg); grid.appendChild(c); }
+    const gear = $('#pf-gear'); gear.replaceChildren();
+    const gearCard = (label, def, thumb) => { const d = document.createElement('div'); d.className = 'gr r-' + def.rarity; d.style.setProperty('--rc', RARITY[def.rarity].color); const im = document.createElement('div'); im.className = 'gr-img'; try { const i = new Image(); i.src = thumb(); i.draggable = false; im.appendChild(i); } catch { /* ohne Bild */ } const t = document.createElement('div'); t.className = 'gr-t'; t.innerHTML = '<small>' + label + '</small><b>' + esc(def.name) + '</b><em>' + RARITY[def.rarity].name + '</em>'; d.append(im, t); gear.appendChild(d); };
+    gearCard('Charakter', sk, () => skinThumb(sk.id)); gearCard('Waffen-Skin', ws, () => wskinThumb(ws.id));
+    if (self) { try { const se = await Account.season(); if (se.enabled && this.cur === 'profile') { const d = document.createElement('div'); d.className = 'gr gr-se'; d.innerHTML = '<div class="gr-t"><small>Season</small><b>' + se.me.points.toLocaleString('de-DE') + ' Punkte</b><em>' + (se.me.position ? 'Platz ' + se.me.position : 'noch nicht platziert') + '</em></div>'; d.onclick = () => { audio.click(); this.go('season'); }; gear.appendChild(d); } } catch { /* optional */ } }
     $('#pf-since').textContent = 'Konto seit ' + new Date(user.createdAt).toLocaleDateString('de-DE');
     // Aktionen bei fremden Profilen
     const act = $('#pf-actions'); act.replaceChildren();
@@ -418,37 +427,71 @@ export class UI {
     const w = $('#emote-wheel'); w.classList.add('cd'); setTimeout(() => w.classList.remove('cd'), EMOTE_COOLDOWN * 1000);
   }
 
-  // ---------- Season ----------
+  // ---------- Season (Saison-Pass) ----------
   async openSeason() {
     const guest = !Account.user; $('#se-guest').style.display = guest ? '' : 'none'; $('#se-main').style.display = guest ? 'none' : ''; $('#se-off').style.display = 'none';
+    $('#se-board').onclick = () => { audio.click(); this.go('board'); }; $('#se-login').onclick = () => { audio.click(); this.go('login'); };
     if (guest) return; await this.refreshSeason();
   }
   async refreshSeason(data) {
     let d = data; if (!d) { try { d = await Account.season(); } catch (e) { this.toast(e.message, 'bad'); return; } }
     $('#se-off').style.display = d.enabled ? 'none' : ''; $('#se-main').style.display = d.enabled ? '' : 'none'; if (!d.enabled) return;
-    const left = Math.max(0, Math.ceil((d.season.endsAt - Date.now()) / 86400000)), pts = d.me.points;
-    $('#se-name').textContent = d.season.name; $('#se-left').textContent = left <= 1 ? 'endet heute' : 'noch ' + left + ' Tage'; $('#se-pts').textContent = pts;
-    $('#se-pos').textContent = d.me.position ? 'Platz ' + d.me.position : 'noch nicht platziert';
-    const nextIdx = d.tiers.findIndex(t => t.points > pts), prev = nextIdx > 0 ? d.tiers[nextIdx - 1].points : 0;
-    $('#se-fill').style.width = nextIdx < 0 ? '100%' : (100 * (pts - prev) / (d.tiers[nextIdx].points - prev)) + '%';
-    $('#se-next').textContent = nextIdx < 0 ? 'Alle Belohnungen erreicht!' : 'Noch ' + (d.tiers[nextIdx].points - pts) + ' Punkte bis Stufe ' + (nextIdx + 1);
-    const tiers = $('#se-tiers'); tiers.replaceChildren();
-    d.tiers.forEach((t, i) => {
-      const done = d.me.claimed.includes(i), ready = !done && pts >= t.points, row = document.createElement('div'); row.className = 'se-tier' + (done ? ' done' : '') + (ready ? ' ready' : '');
-      const l = document.createElement('div'), b = document.createElement('b'), s = document.createElement('small'); b.textContent = 'Stufe ' + (i + 1) + ' · +' + t.coins + ' Münzen'; s.textContent = t.points + ' Punkte'; l.append(b, s); row.appendChild(l);
-      if (done) { const x = document.createElement('small'); x.textContent = '✓ abgeholt'; row.appendChild(x); }
-      else if (ready) { const btn = document.createElement('button'); btn.className = 'btn small'; btn.textContent = 'Abholen'; btn.onclick = async () => { btn.disabled = true; try { const r = await Account.claimSeason(i); audio.levelUp(); this.toast('+' + r.coins + ' Münzen!', 'good'); this.refreshProfile(); this.refreshSeason(r.season); } catch (e) { this.toast(e.message, 'bad'); btn.disabled = false; } }; row.appendChild(btn); }
-      else { const x = document.createElement('small'); x.textContent = '🔒'; row.appendChild(x); }
-      tiers.appendChild(row);
+    const left = Math.max(0, Math.ceil((d.season.endsAt - Date.now()) / 86400000)), pts = d.me.points, tiers = d.tiers, top = tiers[tiers.length - 1].points;
+    $('#se-name').textContent = d.season.name.replace(/^Saison /, ''); $('#se-left').innerHTML = '<small>ENDET IN</small><b>' + (left <= 1 ? 'heute' : left + ' Tagen') + '</b>';
+    $('#se-pts').textContent = pts.toLocaleString('de-DE'); $('#se-pos').textContent = d.me.position ? 'Platz ' + d.me.position + ' der Rangliste' : 'noch nicht platziert';
+    const reached = tiers.filter(t => pts >= t.points).length, nextIdx = tiers.findIndex(t => t.points > pts);
+    $('#se-lvl').textContent = 'Stufe ' + reached + ' von ' + tiers.length;
+    $('#se-next').textContent = nextIdx < 0 ? 'Alle Belohnungen erreicht!' : 'Noch ' + (tiers[nextIdx].points - pts) + ' Punkte bis Stufe ' + (nextIdx + 1) + ' (+' + tiers[nextIdx].coins + ' Münzen)';
+    $('#se-fill').style.width = Math.min(100, 100 * pts / top) + '%';
+    const marks = $('#se-marks'); marks.replaceChildren(); tiers.forEach((t, i) => { const m = document.createElement('span'); m.style.left = (100 * t.points / top) + '%'; m.className = pts >= t.points ? 'on' : ''; m.textContent = i + 1; marks.appendChild(m); });
+    const claimable = tiers.map((t, i) => ({ t, i })).filter(({ t, i }) => pts >= t.points && !d.me.claimed.includes(i)), sumC = claimable.reduce((a, c) => a + c.t.coins, 0), claimed = d.me.claimed.reduce((a, i) => a + (tiers[i]?.coins || 0), 0), total = tiers.reduce((a, t) => a + t.coins, 0);
+    $('#se-sum').innerHTML = '<span><b>' + claimed + '</b> abgeholt</span><span><b>' + sumC + '</b> bereit</span><span><b>' + total + '</b> insgesamt</span>';
+    const all = $('#se-claimall'); all.style.display = claimable.length ? '' : 'none'; $('#se-claimall-n').innerHTML = '+' + sumC + ' <i class="cn"></i>';
+    all.onclick = async () => { all.disabled = true; let last = null, got = 0; try { for (const { i } of claimable) { const r = await Account.claimSeason(i); got += r.coins; last = r.season; } audio.levelUp(); this.toast('+' + got + ' Münzen abgeholt!', 'good'); this.refreshProfile(); this.refreshSeason(last); } catch (e) { this.toast(e.message, 'bad'); this.refreshSeason(); } all.disabled = false; };
+    const wrap = $('#se-tiers'); wrap.replaceChildren(); let firstReady = null;
+    tiers.forEach((t, i) => {
+      const done = d.me.claimed.includes(i), ready = !done && pts >= t.points, isNext = i === nextIdx, last = i === tiers.length - 1;
+      const c = document.createElement('div'); c.className = 'tier' + (done ? ' done' : '') + (ready ? ' ready' : '') + (isNext ? ' next' : '') + (last ? ' final' : '') + (i % 4 === 3 ? ' big' : ''); if (ready && !firstReady) firstReady = c;
+      const n = Math.min(5, 1 + Math.floor(t.coins / 100)), stack = Array.from({ length: n }, (_, k) => '<span class="cn" style="--k:' + k + '"></span>').join('');
+      c.innerHTML = '<div class="t-no">STUFE ' + (i + 1) + (last ? ' · HAUPTPREIS' : '') + '</div><div class="t-coins">' + stack + '</div><div class="t-amt">+' + t.coins + '</div><div class="t-unit">MÜNZEN</div>';
+      const foot = document.createElement('div'); foot.className = 't-foot';
+      if (done) foot.innerHTML = '<span class="t-ok">✓ ABGEHOLT</span>';
+      else if (ready) { const b = document.createElement('button'); b.className = 't-btn'; b.textContent = 'ABHOLEN'; b.onclick = async () => { b.disabled = true; try { const r = await Account.claimSeason(i); audio.levelUp(); this.toast('+' + r.coins + ' Münzen!', 'good'); this.refreshProfile(); this.refreshSeason(r.season); } catch (e) { this.toast(e.message, 'bad'); b.disabled = false; } }; foot.appendChild(b); }
+      else { const need = t.points - pts; foot.innerHTML = '<span class="t-lock">🔒 ' + t.points.toLocaleString('de-DE') + ' Punkte</span>' + (isNext ? '<i class="t-bar"><u style="width:' + Math.max(4, 100 * (pts - (i ? tiers[i - 1].points : 0)) / (t.points - (i ? tiers[i - 1].points : 0))) + '%"></u></i><small>noch ' + need + '</small>' : ''); }
+      c.appendChild(foot); wrap.appendChild(c);
     });
-    const board = $('#se-board'); board.replaceChildren(); $('#se-me-line').textContent = '';
-    if (!d.top.length) board.innerHTML = '<div class="empty">Noch niemand in der Rangliste. Spiele ein Match!</div>';
-    for (const r of d.top) {
-      const row = document.createElement('div'); row.className = 'se-row' + (r.name === Account.user.username ? ' me' : '') + (r.pos <= 3 ? ' top' + r.pos : '');
-      const p = document.createElement('span'), n = document.createElement('span'), lv = document.createElement('small'), s = document.createElement('span'); p.className = 'p'; p.textContent = '#' + r.pos; n.className = 'n'; n.textContent = r.name; lv.textContent = 'Lv ' + r.level; s.className = 's'; s.textContent = r.points;
-      row.append(p, n, lv, s); row.style.cursor = 'pointer'; row.title = 'Profil ansehen'; row.onclick = () => { audio.click(); if (r.name === Account.user.username) this.openProfile(null); else this.openProfile(r.name); }; board.appendChild(row);
+    const target = firstReady || wrap.children[Math.max(0, nextIdx)]; if (target) setTimeout(() => target.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }), 80);
+  }
+
+  // ---------- Rangliste ----------
+  openBoard() {
+    const guest = !Account.user; $('#lb-guest').style.display = guest ? '' : 'none'; $('#lb-main').style.display = guest ? 'none' : ''; $('#lb-login').onclick = () => { audio.click(); this.go('login'); };
+    this.lbKind = this.lbKind || 'season'; $$('#lb-kind button').forEach(b => { b.classList.toggle('on', b.dataset.k === this.lbKind); b.onclick = () => { audio.click(); this.lbKind = b.dataset.k; this.openBoard(); }; });
+    if (guest) return; this.refreshBoard();
+  }
+  async refreshBoard() {
+    const kind = this.lbKind; let d; try { d = await Account.leaderboard(kind); } catch (e) { this.toast(e.message, 'bad'); return; } if (this.cur !== 'board' || kind !== this.lbKind) return;
+    const RC = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' }, me = Account.user.username;
+    $('#lb-sub').textContent = kind === 'season' ? d.season.name + ' · Top 50' : 'Rangpunkte · Top 50';
+    const av = (r) => { const a = document.createElement('div'); a.className = 'lb-av'; a.textContent = r.name.slice(0, 1).toUpperCase(); a.style.background = RC[r.rank] || '#3b7ddd'; return a; };
+    const open = (r) => { audio.click(); r.name === me ? this.openProfile(null) : this.openProfile(r.name); };
+    const pod = $('#lb-podium'); pod.replaceChildren(); const rows = d.rows;
+    if (!rows.length) { pod.innerHTML = '<div class="empty">Noch niemand gewertet – ' + (kind === 'season' ? 'spiele ein Match, um dich zu platzieren!' : 'gewinne Ranked-Matches, um Rangpunkte zu sammeln!') + '</div>'; }
+    for (const [i, cls] of [[1, 'p2'], [0, 'p1'], [2, 'p3']]) {
+      const r = rows[i]; const c = document.createElement('div'); c.className = 'pd ' + cls + (r ? '' : ' empty');
+      if (r) { const a = av(r); const crown = i === 0 ? '<i class="pd-crown">♛</i>' : ''; c.append(a); c.insertAdjacentHTML('afterbegin', crown); c.insertAdjacentHTML('beforeend', '<b class="pd-name">' + esc(r.name) + '</b><span class="pd-pts">' + r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small></span><em class="pd-rank" style="color:' + (RC[r.rank] || '#fff') + '">' + r.rank + ' · Lv ' + r.level + '</em>'); c.onclick = () => open(r); if (r.name === me) c.classList.add('me'); }
+      c.insertAdjacentHTML('beforeend', '<div class="pd-block"><span>' + (i + 1) + '</span></div>'); pod.appendChild(c);
     }
-    if (d.me.position > 25) $('#se-me-line').textContent = '(du: Platz ' + d.me.position + ')';
+    const list = $('#lb-list'); list.replaceChildren();
+    for (const r of rows.slice(3)) {
+      const row = document.createElement('div'); row.className = 'lb-row' + (r.name === me ? ' me' : ''); row.title = 'Profil ansehen'; row.onclick = () => open(r);
+      const p = document.createElement('span'); p.className = 'lb-pos'; p.textContent = r.pos; const n = document.createElement('div'); n.className = 'lb-n'; n.innerHTML = '<b>' + esc(r.name) + '</b><small>Level ' + r.level + ' · ' + r.wins + ' Siege</small>';
+      const rk = document.createElement('span'); rk.className = 'lb-rk'; rk.textContent = r.rank; rk.style.color = RC[r.rank] || '#fff'; rk.style.borderColor = RC[r.rank] || '#fff';
+      const pt = document.createElement('span'); pt.className = 'lb-pt'; pt.innerHTML = r.points.toLocaleString('de-DE') + ' <small>' + d.unit + '</small>';
+      row.append(p, av(r), n, rk, pt); list.appendChild(row);
+    }
+    const m = $('#lb-me'); const inTop = rows.some(r => r.name === me);
+    m.innerHTML = d.me.position ? '<span>DEINE PLATZIERUNG</span><b>#' + d.me.position + '</b><em>' + d.me.points.toLocaleString('de-DE') + ' ' + d.unit + (inTop ? '' : ' · außerhalb der Top 50') + '</em>' : '<span>DEINE PLATZIERUNG</span><em>' + (kind === 'season' ? 'Noch keine Punkte – spiele ein Match!' : 'Noch keine Rangpunkte – spiele Ranked!') + '</em>';
   }
 
   // ---------- Freunde ----------
@@ -655,38 +698,78 @@ export class UI {
     $('#set-invert').checked = S.invertY; $('#set-dmg').checked = S.dmgNumbers;
   }
 
-  // ---------- Skins ----------
+  // ---------- Garderobe / Skin-Shop ----------
   buildSkins() {
+    this.shop = { tab: 'skin', sel: { skin: null, wskin: null } };
     const wsel = $('#skin-weapon'); wsel.innerHTML = '';
-    for (const id of ['striker', 'viper', 'hornet', 'breaker', 'marksman', 'longshot', 'stormcaller', 'pulse', 'lancer', 'blade', 'magnum']) { const b = document.createElement('button'); b.textContent = WEAPONS[id].name; b.dataset.v = id; b.onclick = () => { audio.click(); Progress.d.menuWeapon = id; Progress.save(); this.g.menuChar && this.g.menuChar.setWeapon(id); this.refreshSkins(); }; wsel.appendChild(b); }
+    for (const id of ['striker', 'viper', 'hornet', 'breaker', 'marksman', 'longshot', 'stormcaller', 'pulse', 'lancer', 'blade', 'magnum']) { const b = document.createElement('button'); b.textContent = WEAPONS[id].name; b.dataset.v = id; b.onclick = () => { audio.click(); Progress.d.menuWeapon = id; Progress.save(); this.applyPreview(); this.refreshSkins(true); }; wsel.appendChild(b); }
+    $$('#shop-tabs button').forEach(b => b.onclick = () => { audio.click(); this.shop.tab = b.dataset.tab; this.applyPreview(); this.refreshSkins(); });
+    // 360°-Ansicht: Ziehen dreht (und kippt), Mausrad zoomt, nach 2,5 s ohne Eingabe dreht sich die Vorschau von selbst weiter
+    const st = $('#shop-stage'); let drag = null; const g = this.g, idle = () => { g.menuIdleAt = performance.now() / 1000 + 2.5; };
+    st.addEventListener('pointerdown', (e) => { if (e.target.closest('button, .shop-buy, .shop-info')) return; drag = { x: e.clientX, y: e.clientY }; try { st.setPointerCapture(e.pointerId); } catch { /* egal */ } st.classList.add('drag'); idle(); });
+    st.addEventListener('pointermove', (e) => { if (!drag) return; g.menuYaw -= (e.clientX - drag.x) * 0.009; g.menuPitch = Math.max(-0.3, Math.min(0.6, g.menuPitch + (e.clientY - drag.y) * 0.004)); drag.x = e.clientX; drag.y = e.clientY; idle(); });
+    for (const t of ['pointerup', 'pointercancel']) st.addEventListener(t, () => { drag = null; st.classList.remove('drag'); idle(); });
+    st.addEventListener('wheel', (e) => { g.menuZoom = Math.max(0.5, Math.min(1.5, g.menuZoom * (1 + Math.sign(e.deltaY) * 0.08))); idle(); }, { passive: true });
   }
-  refreshSkins() {
-    const d = Progress.d, inv = Account.user ? Account.inv : null, grid = $('#skin-grid'), wgrid = $('#wskin-grid'); grid.innerHTML = ''; wgrid.innerHTML = '';
-    const owned = (type, id) => inv ? inv.owned.includes(type + ':' + id) : (type === 'skin' ? Progress.skinUnlocked(id) : Progress.wskinUnlocked(id));
-    const eq = { skin: inv ? inv.equipped.skin : d.skin, wskin: inv ? inv.equipped.wskin : d.wskin };
-    $('#skin-coins').textContent = inv ? `Münzen: ${inv.coins} · Level-Skins sind gratis, mit Münzen kannst du früher kaufen.` : (Account.available ? 'Melde dich an, um Skins zu kaufen und serverseitig zu speichern.' : '');
-    const label = (type, s) => { const it = CATALOG_BY_ID[type + ':' + s.id]; if (owned(type, s.id)) return eq[type] === s.id ? 'Ausgewählt' : 'Im Besitz'; return inv ? `${it.price} Münzen · Lv ${s.level}` : (type === 'wskin' && s.id === 'gold' ? 'Lv ' + s.level + ' oder Ente' : 'Level ' + s.level); };
-    const act = async (type, s) => {
-      const id = type + ':' + s.id;
-      if (owned(type, s.id)) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.refreshSkins(); return; }
-      if (!inv) { audio.error(); this.toast(`${s.name}: erreiche Level ${s.level} (oder melde dich an, um zu kaufen).`, 'bad'); return; }
-      const price = CATALOG_BY_ID[id].price;
-      const coins = Account.inv?.coins ?? 0;
-      if (coins < price) { audio.error(); await this.confirm({ title: 'Nicht genug Münzen', lines: [s.name + ' kostet ' + price + ' Münzen.', 'Du hast ' + coins + ' Münzen – dir fehlen ' + (price - coins) + '.', { cls: '', text: 'Münzen gibt es für Matches, Tagesbelohnungen und die Season.' }], ok: 'Verstanden', cancel: null }); return; }
-      if (!(await this.confirm({ title: 'Kauf bestätigen', lines: [{ cls: 'dl-big', text: s.name }, 'Preis: ' + price + ' Münzen', { cls: '', text: 'Danach hast du ' + (coins - price) + ' Münzen übrig.' }], ok: 'Kaufen · ' + price + ' Münzen' }))) return;
-      try { await Account.buy(id); audio.levelUp(); this.toast(s.name + ' gekauft!', 'good'); this.refreshProfile(); this.refreshSkins(); } catch (e) { audio.error(); this.toast(e.message, 'bad'); }
-    };
-    for (const s of SKINS) {
-      const ok = owned('skin', s.id), el = document.createElement('div'); el.className = 'skin' + (eq.skin === s.id ? ' on' : '') + (ok ? '' : ' lock');
-      el.innerHTML = `<div class="sw"><i style="background:${s.armor}"></i><i style="background:${s.suit}"></i><i style="background:${s.accent}"></i></div><b>${s.name}</b><small>${label('skin', s)}</small>`;
-      el.onclick = () => act('skin', s); grid.appendChild(el);
+  openShop() {
+    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin };
+    this.shop.sel = { skin: eq.skin, wskin: eq.wskin }; this.shop.tab = 'skin'; this.applyPreview(); this.refreshSkins();
+  }
+  // Skin-Vorschau im 3D-Raum aktualisieren (ohne etwas auszurüsten)
+  applyPreview() {
+    const inv = Account.user ? Account.inv : null, eq = inv ? inv.equipped : { skin: Progress.d.skin, wskin: Progress.d.wskin }, sh = this.shop;
+    this.g.setSkinPreview({ type: sh.tab, skin: sh.tab === 'skin' ? sh.sel.skin : eq.skin, wskin: sh.tab === 'wskin' ? sh.sel.wskin : eq.wskin, weapon: Progress.d.menuWeapon || 'striker' });
+  }
+  shopStatus(type, s) {
+    const inv = Account.user ? Account.inv : null, id = type + ':' + s.id, it = CATALOG_BY_ID[id], d = Progress.d;
+    const owned = inv ? inv.owned.includes(id) : (type === 'skin' ? Progress.skinUnlocked(s.id) : Progress.wskinUnlocked(s.id));
+    const eq = inv ? inv.equipped[type] : d[type];
+    return { owned, equipped: owned && eq === s.id, price: it.price, coins: inv ? inv.coins : 0, logged: !!inv, level: s.level, id };
+  }
+  async shopAct(type, s) {
+    const st = this.shopStatus(type, s), inv = Account.user ? Account.inv : null, d = Progress.d;
+    if (st.equipped) return;
+    if (st.owned) { audio.click(); if (inv) { try { await Account.equip(type === 'skin' ? s.id : null, type === 'wskin' ? s.id : null); } catch (e) { this.toast(e.message, 'bad'); return; } } else { d[type] = s.id; Progress.save(); } this.g.refreshMenuChar(); this.g.syncWeaponShow(); this.toast(s.name + ' ausgerüstet', 'good'); this.refreshSkins(); return; }
+    if (!st.logged) { audio.error(); this.go('login'); return; }
+    if (st.coins < st.price) { audio.error(); this.toast('Dir fehlen noch ' + (st.price - st.coins) + ' Münzen für ' + s.name + '.', 'bad'); return; }
+    if (!(await this.confirm({ title: 'Kauf bestätigen', lines: [{ cls: 'dl-big', text: s.name }, RARITY[s.rarity].name + ' · ' + (type === 'skin' ? 'Charakter-Skin' : 'Waffen-Skin'), 'Preis: ' + st.price + ' Münzen', { cls: '', text: 'Danach hast du ' + (st.coins - st.price) + ' Münzen übrig.' }], ok: 'Kaufen · ' + st.price + ' Münzen' }))) return;
+    try { await Account.buy(st.id); audio.levelUp(); this.toast(s.name + ' gekauft!', 'good'); this.refreshProfile(); this.refreshSkins(); } catch (e) { audio.error(); this.toast(e.message, 'bad'); }
+  }
+  refreshSkins(keep) {
+    const sh = this.shop, type = sh.tab, list = type === 'skin' ? SKINS : WSKINS, grid = $('#shop-grid'), inv = Account.user ? Account.inv : null;
+    $$('#shop-tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === type)); $$('#skin-weapon button').forEach(b => b.classList.toggle('on', b.dataset.v === (Progress.d.menuWeapon || 'striker')));
+    $('#shop-coins').innerHTML = inv ? '<i class="cn"></i><b>' + inv.coins.toLocaleString('de-DE') + '</b>' : '<button class="link" id="shop-login">Anmelden zum Kaufen</button>'; const lg = $('#shop-login'); if (lg) lg.onclick = () => { audio.click(); this.go('login'); };
+    if (!sh.sel[type]) sh.sel[type] = list[0].id;
+    const sel = list.find(s => s.id === sh.sel[type]) || list[0];
+    if (!keep) {
+      grid.replaceChildren(); grid.className = 'shop-grid ' + type;
+      const imgs = [];
+      for (const s of list) {
+        const st = this.shopStatus(type, s), r = RARITY[s.rarity], c = document.createElement('button'); c.className = 'sc r-' + s.rarity + (s.id === sel.id ? ' sel' : '') + (st.owned ? ' own' : ' lock') + (st.equipped ? ' eq' : ''); c.style.setProperty('--rc', r.color); c.dataset.id = s.id;
+        const img = document.createElement('div'); img.className = 'sc-img'; const tag = document.createElement('i'); tag.className = 'sc-rar'; tag.textContent = r.name;
+        const nm = document.createElement('b'); nm.textContent = s.name; const sm = document.createElement('small'); sm.className = 'sc-st';
+        sm.innerHTML = st.equipped ? '✓ Ausgerüstet' : st.owned ? 'Im Besitz' : (st.logged ? '<i class="cn"></i>' + st.price : 'Level ' + st.level);
+        if (!st.owned && st.logged && st.coins < st.price) sm.classList.add('poor'); if (!st.owned) { const lk = document.createElement('u'); lk.className = 'sc-lock'; lk.textContent = '🔒'; c.appendChild(lk); }
+        c.append(img, tag, nm, sm); c.onclick = () => { audio.click(); sh.sel[type] = s.id; this.applyPreview(); $$('.sc', grid).forEach(x => x.classList.toggle('sel', x === c)); this.refreshSkins(true); }; grid.appendChild(c); imgs.push([img, s]);
+      }
+      // Vorschaubilder nach und nach rendern, damit das Öffnen nicht ruckelt
+      let i = 0; const next = () => { if (this.cur !== 'skins' || i >= imgs.length || this.shop.tab !== type) return; const [el, s] = imgs[i++]; try { const im = new Image(); im.src = type === 'skin' ? skinThumb(s.id) : wskinThumb(s.id); im.draggable = false; el.appendChild(im); } catch (e) { console.warn('Vorschaubild', e); } setTimeout(next, 0); }; next();
     }
-    for (const s of WSKINS) {
-      const ok = owned('wskin', s.id), el = document.createElement('div'); el.className = 'skin' + (eq.wskin === s.id ? ' on' : '') + (ok ? '' : ' lock');
-      el.innerHTML = `<div class="sw"><i style="background:${s.tint ? '#' + s.tint.toString(16).padStart(6, '0') : '#2b3038'}"></i><i style="background:${s.glow ? '#' + s.glow.toString(16).padStart(6, '0') : '#ffd24a'}"></i></div><b>${s.name}</b><small>${label('wskin', s)}</small>`;
-      el.onclick = () => act('wskin', s); wgrid.appendChild(el);
-    }
-    $$('#skin-weapon button').forEach(b => b.classList.toggle('on', b.dataset.v === (d.menuWeapon || 'striker')));
+    // Info + Kaufknopf
+    const st = this.shopStatus(type, sel), r = RARITY[sel.rarity];
+    const EXTRA = { wings: 'Flügel', rays: 'Strahlenkranz', crystals: 'Eiskristalle', vents: 'Glühkern', spikes: 'Schulterdornen', leaves: 'Blätter', katana: 'Katana', cape: 'Umhang', ribbons: 'Lichtbänder', halo2: 'Doppel-Halo', crown: 'Flammenkrone', orbit: 'Kreisende Fragmente', aura: 'Boden-Aura', hue: 'Farbwechsel', pulse: 'Pulsierendes Glühen', strip: 'Leuchtstreifen', core: 'Energiekern', ring: 'Mündungsringe', shimmer: 'Schimmer' };
+    const fx = (type === 'skin' ? sel.extras : sel.fx) || [];
+    const blurb = type === 'skin' ? sel.blurb : ({ default: 'Das klassische Finish.', carbon: 'Mattes Carbon mit mintgrünem Leuchten.', gold: 'Echtes Gold – spiegelnd und schwer. Auch über die Goldene Ente erhältlich.', neon: 'Dunkles Metall mit pinkem Neon-Raster.', toxic: 'Giftgrünes Leuchten auf dunklem Lauf.', magma: 'Glühende Lava unter schwarzer Kruste.', frost: 'Eisweiß mit kaltem Blau.', void: 'Verschluckt das Licht – nur violette Kanten leuchten.', dragon: 'Drachenrot mit goldenem Schimmer.', prism: 'Perlweiß mit wanderndem Regenbogen-Leuchten.' }[sel.id] || '');
+    $('#shop-info').innerHTML = '<div class="si-rar" style="--rc:' + r.color + '"><i></i>' + r.name + '</div><h3>' + esc(sel.name) + '</h3><p>' + esc(blurb) + '</p>' + (fx.length ? '<div class="si-fx">' + fx.map(x => '<span>' + (EXTRA[x] || x) + '</span>').join('') + '</div>' : '') + '<div class="si-meta"><span>Level <b>' + sel.level + '</b></span>' + (st.logged && !st.owned ? '<span>Preis <b>' + st.price + '</b></span>' : '') + '</div>';
+    $('#shop-stage').classList.toggle('wmode', type === 'wskin'); $('#shop-info').style.setProperty('--rc', r.color); $('#shop-stage').style.setProperty('--rc', r.color);
+    const btn = $('#shop-btn'), note = $('#shop-note'); btn.disabled = false; btn.removeAttribute('aria-disabled');
+    let cls, label, hint = '';
+    if (st.equipped) { cls = 'eq'; label = '✓ AUSGERÜSTET'; hint = 'Das trägst du gerade.'; }
+    else if (st.owned) { cls = 'go'; label = 'AUSRÜSTEN'; hint = 'Im Besitz – ein Klick und du trägst ihn.'; }
+    else if (!st.logged) { cls = 'off'; label = 'ANMELDEN ZUM KAUFEN'; hint = 'Gratis ab Level ' + st.level + ' · du bist Level ' + Progress.d.level + '.'; }
+    else if (st.coins < st.price) { cls = 'off'; label = st.price + ' 🪙 · ' + (st.price - st.coins) + ' FEHLEN'; btn.setAttribute('aria-disabled', 'true'); hint = 'Du hast ' + st.coins + ' Münzen. Gratis ab Level ' + st.level + '.'; }
+    else { cls = 'buy'; label = 'KAUFEN · ' + st.price + ' 🪙'; hint = 'Danach bleiben dir ' + (st.coins - st.price) + ' Münzen. Oder gratis ab Level ' + st.level + '.'; }
+    btn.className = 'shop-btn ' + cls; btn.innerHTML = label.replace('🪙', '<i class="cn"></i>'); note.textContent = hint; btn.onclick = () => this.shopAct(type, sel);
   }
   buildAchievements() { }
   refreshAchievements() {

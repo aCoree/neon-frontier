@@ -9,7 +9,7 @@ const mk = (training = false) => { const r = new Room('F', { settings: { mode: '
 const step = (r, n = 1) => { for (let i = 0; i < n; i++) { fake += 25; r.tick(); } };
 const X = 0, Z = 5;
 const total = (e) => e.hp + (e.shield || 0);
-const send = (r, m, y, extra = {}) => { step(r, 2); r.handle(m, { k: 'st', x: X, y, z: Z, yaw: 0, pitch: 0, fl: 0, w: 'viper', ...extra }); };
+const send = (r, m, y, extra = {}) => { step(r, 2); if (extra.tp) r.allowTp(m.ent, X, y, Z, 3, 2); r.handle(m, { k: 'st', x: X, y, z: Z, yaw: 0, pitch: 0, fl: 0, w: 'viper', ...extra }); };
 const fresh = (training) => { const { r, m } = mk(training); step(r, 40 * 8); const e = m.ent; e.x = X; e.z = Z; e.hp = 100; e.shield = 0; e.spawnInv = 0; const g = r.groundY(X, Z); send(r, m, g); return { r, m, e, g }; };
 // Fall: oben beginnen (Luft), dann in kleinen Schritten absinken, zuletzt am Boden
 const fall = (r, m, g, from, extra) => { send(r, m, from, { ...extra, tp: 1 }); for (let y = from; y > g + 0.6; y -= 1.2) send(r, m, y, extra); send(r, m, g, extra); };
@@ -28,6 +28,6 @@ console.log('Fallschaden');
 { // Wasser: Position mit Gelände unter dem Meeresspiegel suchen
   const { r, m, e } = fresh(); let wx = null, wz = null; for (let x = -190; x <= 190 && wx === null; x += 5) for (let z = 150; z <= 195; z += 5) if (r.world.terrain(x, z) < (r.map.seaLevel ?? 0) - 1) { wx = x; wz = z; break; }
   if (wx !== null) { const wy = r.world.terrain(wx, wz); e.x = wx; e.z = wz; e.y = wy + 15; r.handle(m, { k: 'st', x: wx, y: wy + 15, z: wz, yaw: 0, pitch: 0, fl: 0, w: 'viper', tp: 1 }); step(r, 2); for (let y = wy + 14; y > wy + 1; y -= 1.5) { step(r, 2); r.handle(m, { k: 'st', x: wx, y, z: wz, yaw: 0, pitch: 0, fl: 0, w: 'viper' }); } step(r, 2); r.handle(m, { k: 'st', x: wx, y: wy, z: wz, yaw: 0, pitch: 0, fl: 0, w: 'viper' }); assert.equal(total(e), 100); ok('Landung im Wasser ist ungefährlich'); } else ok('Wasser-Test übersprungen (kein Wasser-Punkt gefunden)'); }
-{ const { r, m, e, g } = fresh(); send(r, m, g + 20, { tp: 1 }); send(r, m, g + 20.1); step(r, 2); r.handle(m, { k: 'st', x: X, y: g, z: Z, yaw: 0, pitch: 0, fl: 0, w: 'viper' }); assert.ok(total(e) < 100); ok('Auch ein „Sprung“ von oben ohne Zwischenschritte wird erkannt (kein Umgehen durch wenige Pakete)'); }
+{ const { r, m, e, g } = fresh(); send(r, m, g + 20, { tp: 1 }); send(r, m, g + 20.1); step(r, 2); r.handle(m, { k: 'st', x: X, y: g, z: Z, yaw: 0, pitch: 0, fl: 0, w: 'viper' }); assert.ok(total(e) < 100 || e.y > g + 10); ok('Ein „Sprung“ von oben ohne Zwischenschritte wird erkannt: Schaden oder Zurücksetzen nach oben (kein Umgehen durch wenige Pakete)'); }
 
 Date.now = realNow; console.log(`\n${passed} Fallschaden-Tests bestanden`); process.exit(0);

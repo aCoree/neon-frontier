@@ -31,7 +31,11 @@ Freunde im selben WLAN öffnen `http://<deine-lokale-IP>:8080`. Für Freunde üb
 | E | Interagieren (Kisten, Schalter, Geheimnisse) | F | Gadget (Enterhaken, Teleporter, Drohne, Scanner) |
 | Z / X | Medkit / Schildtrank | G / H | Granate / Rauchbombe |
 | Tab | Punktetafel | Enter | Chat |
-| Esc | Pause (Maus freigeben) | | |
+| Esc | Pause (Maus freigeben) | V | Aktuelle Waffe droppen (E bei vollem Inventar = tauschen) |
+| M | Große Karte mit Teammates | B (halten) + Zahl | Emote |
+
+### Handy & Tablet (Touch)
+Wird ein Touch-Gerät erkannt (oder `?touch=1` an die Adresse gehängt), erscheint im Match eine Touch-Steuerung: **linker Daumen** = virtueller Stick (ganz an den Rand schieben = Sprinten), **rechter Daumen** = Umsehen (Ziehen) plus Knöpfe für Feuer, Zielen, Springen, Ducken, Nachladen, Dash, Nehmen (E), Waffe wechseln, Droppen, Emote, Karte, Tabelle, Chat und Pause. Waffen-Slots, Heilung/Schild/Granate/Gadget in der Anzeige unten sind direkt antippbar. Das Spiel läuft im **Querformat**; im Hochformat erscheint ein Hinweis. Aussehen/Abstände der Knöpfe stehen in `client/css/style.css` (Abschnitt „Touch-Steuerung“), die Logik in `client/js/game/touch.js`.
 
 ## 3. Online bringen – Frontend (GitHub Pages) + Server (Node.js-Hoster)
 
@@ -114,5 +118,15 @@ server/server.js        HTTP + WebSocket-Server (Räume, Reconnect, Rate-Limit, 
 
 ```bash
 npm test        # headless Simulation (Bots, Waffen, Projektile, Pickups) mit Laufzeitmessung
+npm run mptest  # echter Mehrspielertest: N WebSocket-Clients spielen ein Match (lokal oder gegen Render, siehe unten)
 npm run check   # Karten-Validierung (Spawns/Pickups auf dem Boden) + Lauftest durch Treppenschächte & Gebäude
 ```
+
+**Mehrspielertest gegen deinen Render-Server** (prüft Verbindung, Lobby, Start, Snapshots, gegenseitige Sichtbarkeit, Treffer, Chat, Latenz und dass ein Speed-/Teleport-Cheater gestoppt wird):
+```bash
+npm run mptest -- https://DEIN-SERVER.onrender.com 6 40     # Ziel, Spieler (2–10), Sekunden
+npm run mptest                                               # ohne Ziel: startet lokal einen eigenen Server
+```
+Der Test nutzt Gast-Verbindungen (keine Konten nötig). Beim ersten Aufruf kann Render ~30–60 s zum Aufwachen brauchen – das Skript wartet darauf.
+
+**Serverseitige Bewegungsprüfung:** Der Server prüft jede Positionsmeldung gegen ein Tempo-Budget (Gehen/Sprinten, Speed-Boost, Dash mit Abklingzeit, Jetpack/Enterhaken nur mit dem Gadget, Sprungplatten, kurz nach Schaden) sowie gegen Aufstiegs- und Schwebe-Hacks. Teleports akzeptiert er nur an Zielen, die er selbst erlaubt hat (Spawn, Karten-Portale, Teleporter-Anker). Verstöße werden zurückgesetzt („Rubber-Band“) und bei Wiederholung als „movement“ im Admin-Bereich gemeldet. Konstanten: `MOVE` in `client/js/shared/sim/room.js`. Tests: `server/test-movement.js` (23).

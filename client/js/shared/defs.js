@@ -72,23 +72,40 @@ export const DIFFS = {
   hard:   { name: 'Schwer',  react: 0.22, aim: 0.016, fire: 1.0,  speed: 1.0,  acc: 0.88, dmg: 1.0, view: 100 },
 };
 
+// Seltenheit: bestimmt Rahmen, Glanz und Aussehen im Shop. Je seltener, desto aufwendiger das Modell (Umhang, Flügel, Aura …).
+export const RARITY = {
+  common:    { name: 'Gewöhnlich', color: '#9db0c8', rank: 0 },
+  rare:      { name: 'Selten',     color: '#4aa8ff', rank: 1 },
+  epic:      { name: 'Episch',     color: '#b45cff', rank: 2 },
+  legendary: { name: 'Legendär',   color: '#ffb52e', rank: 3 },
+  mythic:    { name: 'Mythisch',   color: '#ff4fd8', rank: 4 },
+};
+// extras: Zusatzmodelle (siehe render/skinfx.js) · hue: Farben wechseln laufend · pulse: Leuchtteile pulsieren
 export const SKINS = [
-  { id: 'vanguard', name: 'Vanguard', level: 1,  armor: '#3b7ddd', suit: '#1b2436', accent: '#7ee8ff', visor: '#6cf3ff', head: 'helmet', metal: 0.55 },
-  { id: 'ember',    name: 'Ember',    level: 2,  armor: '#c8402e', suit: '#2b1a17', accent: '#ffb347', visor: '#ff9a3c', head: 'crest',  metal: 0.5 },
-  { id: 'verdant',  name: 'Verdant',  level: 4,  armor: '#4a8c3a', suit: '#1f2a1c', accent: '#c4ff5c', visor: '#b6ff5c', head: 'hood',   metal: 0.25 },
-  { id: 'phantom',  name: 'Phantom',  level: 6,  armor: '#262636', suit: '#0f0f18', accent: '#b45cff', visor: '#c06bff', head: 'helmet', scarf: true, metal: 0.8 },
-  { id: 'solaris',  name: 'Solaris',  level: 8,  armor: '#e8b923', suit: '#3a2f10', accent: '#fff2a8', visor: '#fff2a8', head: 'halo',   metal: 0.95 },
-  { id: 'frost',    name: 'Frost',    level: 10, armor: '#dff1ff', suit: '#5a7fa6', accent: '#6ffcff', visor: '#7ffcff', head: 'antenna', metal: 0.4 },
-  { id: 'rogue',    name: 'Rogue-Bot', level: 13, armor: '#8b96a3', suit: '#2a2f36', accent: '#ff3d52', visor: '#ff2a44', head: 'robot',  metal: 0.9 },
-  { id: 'samurai',  name: 'Neon Samurai', level: 16, armor: '#14141c', suit: '#2a0f22', accent: '#ff3d9a', visor: '#ff5cb0', head: 'horns', metal: 0.7 },
+  { id: 'vanguard', name: 'Vanguard', level: 1,  rarity: 'common',    armor: '#3b7ddd', suit: '#1b2436', accent: '#7ee8ff', visor: '#6cf3ff', head: 'helmet', metal: 0.55, blurb: 'Der Standard-Kämpfer der Neon-Grenze.' },
+  { id: 'ember',    name: 'Ember',    level: 2,  rarity: 'common',    armor: '#c8402e', suit: '#2b1a17', accent: '#ffb347', visor: '#ff9a3c', head: 'crest',  metal: 0.5, extras: ['pulse'], blurb: 'Glühende Rüstung mit Feuerkamm.' },
+  { id: 'verdant',  name: 'Verdant',  level: 4,  rarity: 'rare',      armor: '#4a8c3a', suit: '#1f2a1c', accent: '#c4ff5c', visor: '#b6ff5c', head: 'hood',   metal: 0.25, extras: ['pulse', 'leaves'], blurb: 'Waldläufer in lebendiger Tarnung.' },
+  { id: 'phantom',  name: 'Phantom',  level: 6,  rarity: 'rare',      armor: '#262636', suit: '#0f0f18', accent: '#b45cff', visor: '#c06bff', head: 'helmet', scarf: true, metal: 0.8, extras: ['aura'], blurb: 'Lautlos wie ein Schatten, mit Schal und Aura.' },
+  { id: 'solaris',  name: 'Solaris',  level: 8,  rarity: 'epic',      armor: '#e8b923', suit: '#3a2f10', accent: '#fff2a8', visor: '#fff2a8', head: 'halo',   metal: 0.95, extras: ['rays', 'pulse'], blurb: 'Goldene Rüstung mit Heiligenschein und Strahlenkranz.' },
+  { id: 'frost',    name: 'Frost',    level: 10, rarity: 'epic',      armor: '#dff1ff', suit: '#5a7fa6', accent: '#6ffcff', visor: '#7ffcff', head: 'antenna', metal: 0.4, extras: ['crystals', 'aura'], blurb: 'Eiskristalle wachsen aus den Schultern.' },
+  { id: 'rogue',    name: 'Rogue-Bot', level: 13, rarity: 'epic',     armor: '#8b96a3', suit: '#2a2f36', accent: '#ff3d52', visor: '#ff2a44', head: 'robot',  metal: 0.9, extras: ['vents', 'spikes', 'pulse'], blurb: 'Ausgemusterter Kampfroboter mit Glühkern.' },
+  { id: 'samurai',  name: 'Neon Samurai', level: 16, rarity: 'legendary', armor: '#14141c', suit: '#2a0f22', accent: '#ff3d9a', visor: '#ff5cb0', head: 'horns', metal: 0.7, extras: ['cape', 'katana', 'pulse'], blurb: 'Schwarze Rüstung, Umhang und Katana.' },
+  { id: 'void',     name: 'Void Walker', level: 20, rarity: 'legendary', armor: '#150d24', suit: '#06030d', accent: '#8f4dff', visor: '#d9a8ff', head: 'horns', metal: 0.9, extras: ['wings', 'orbit', 'aura', 'pulse'], blurb: 'Wandelt zwischen den Welten – Splitterflügel und kreisende Fragmente.' },
+  { id: 'aurora',   name: 'Aurora',   level: 25, rarity: 'mythic',    armor: '#e9f7ff', suit: '#27406b', accent: '#5cffd8', visor: '#ffffff', head: 'halo',  metal: 0.85, extras: ['ribbons', 'halo2', 'orbit', 'hue'], blurb: 'Polarlicht in Rüstungsform – die Farben wandern.' },
+  { id: 'inferno',  name: 'Inferno-Lord', level: 30, rarity: 'mythic', armor: '#1c0c08', suit: '#2a0e05', accent: '#ff7a1a', visor: '#ffd166', head: 'horns', metal: 0.75, extras: ['crown', 'cape', 'spikes', 'aura', 'pulse'], blurb: 'Lavarüstung, Flammenkrone und brennender Umhang.' },
+  { id: 'prism',    name: 'Prisma',   level: 40, rarity: 'mythic',    armor: '#f4f1ff', suit: '#2a2748', accent: '#ff5cf0', visor: '#ffffff', head: 'halo',  metal: 1.0, extras: ['wings', 'orbit', 'rays', 'aura', 'hue'], blurb: 'Das seltenste Set: Regenbogen-Flügel, Prismen und Strahlenkranz.' },
 ];
 export const WSKINS = [
-  { id: 'default', name: 'Standard',  level: 1,  tint: null,      glow: null },
-  { id: 'carbon',  name: 'Carbon',    level: 3,  tint: 0x1b1b22,  glow: 0x66ffcc },
-  { id: 'gold',    name: 'Gold',      level: 6,  tint: 0xd9a520,  glow: 0xffe27a },
-  { id: 'neon',    name: 'Neon Grid', level: 9,  tint: 0x1a1030,  glow: 0xff3df0 },
-  { id: 'magma',   name: 'Magma',     level: 12, tint: 0x3a1208,  glow: 0xff6a1a },
-  { id: 'frost',   name: 'Frostbite', level: 15, tint: 0xcfe8ff,  glow: 0x7fe7ff },
+  { id: 'default', name: 'Standard',  level: 1,  rarity: 'common',    tint: null,     glow: null },
+  { id: 'carbon',  name: 'Carbon',    level: 3,  rarity: 'rare',      tint: 0x1b1b22, glow: 0x66ffcc, metal: 0.55, rough: 0.35 },
+  { id: 'gold',    name: 'Gold',      level: 6,  rarity: 'epic',      tint: 0xd9a520, glow: 0xffe27a, metal: 1.0, rough: 0.22 },
+  { id: 'neon',    name: 'Neon Grid', level: 9,  rarity: 'epic',      tint: 0x1a1030, glow: 0xff3df0, metal: 0.7, rough: 0.3, fx: ['strip'] },
+  { id: 'toxic',   name: 'Toxic',     level: 11, rarity: 'epic',      tint: 0x16240f, glow: 0x9dff3a, metal: 0.6, rough: 0.4, fx: ['strip'] },
+  { id: 'magma',   name: 'Magma',     level: 12, rarity: 'legendary', tint: 0x3a1208, glow: 0xff6a1a, metal: 0.5, rough: 0.5, fx: ['strip', 'core'] },
+  { id: 'frost',   name: 'Frostbite', level: 15, rarity: 'legendary', tint: 0xcfe8ff, glow: 0x7fe7ff, metal: 0.85, rough: 0.15, fx: ['strip', 'core'] },
+  { id: 'void',    name: 'Void',      level: 18, rarity: 'legendary', tint: 0x0d0618, glow: 0xa05cff, metal: 0.95, rough: 0.2, fx: ['strip', 'core', 'ring'] },
+  { id: 'dragon',  name: 'Drachenzahn', level: 22, rarity: 'mythic',  tint: 0x5a0d12, glow: 0xffc94a, metal: 1.0, rough: 0.2, fx: ['strip', 'core', 'ring', 'shimmer'] },
+  { id: 'prism',   name: 'Prisma',    level: 30, rarity: 'mythic',    tint: 0xf1edff, glow: 0xff5cf0, metal: 1.0, rough: 0.1, fx: ['strip', 'core', 'ring', 'shimmer', 'hue'] },
 ];
 
 export const ACHIEVEMENTS = [
