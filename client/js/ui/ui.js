@@ -8,6 +8,7 @@ import { SERVER_URL } from '../config.js';
 import { resolveServerUrl } from '../game/net.js';
 import { Account } from '../game/account.js';
 import { Social } from '../game/social.js';
+import { BUILD } from '../version.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -68,6 +69,7 @@ export class UI {
 
   // ---------- Screens ----------
   showScreen(name) {
+    if (name !== 'profile' && this.g.menuOverride) { this.g.menuOverride = null; this.g.refreshMenuChar(); }
     $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; if (name) $('#' + (name === 'hud' ? 'hud' : 's-' + name)).classList.add('show');
     if (name === 'menu') { this.stack = []; this.g.setMenuView('orbit'); this.refreshProfile(); }
@@ -75,6 +77,7 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
+    if (name === 'profile') this.g.setMenuView('skins');
     if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -88,6 +91,7 @@ export class UI {
     this.showScreenKeep(name);
   }
   showScreenKeep(name) {
+    if (name !== 'profile' && this.g.menuOverride) { this.g.menuOverride = null; this.g.refreshMenuChar(); }
     const modal = name === 'name' || name === 'help';
     if (!modal) $$('.screen').forEach(s => s.classList.remove('show'));
     this.cur = name; $('#s-' + name).classList.add('show');
@@ -95,6 +99,7 @@ export class UI {
     if (name === 'ach') this.refreshAchievements();
     if (name === 'friends') this.openFriends();
     if (name === 'season') this.openSeason();
+    if (name === 'profile') this.g.setMenuView('skins');
     if (name === 'mm') this.openMatchmaking();
     if (name === 'multi') { this.checkServer(); this.refreshRooms(); }
     if (name === 'settings') this.syncSettings();
@@ -113,8 +118,8 @@ export class UI {
     const d = Progress.d, u = Account.user;
     if (u) {
       const s = u.stats; $('#pc-name').textContent = u.username + (u.role !== 'PLAYER' ? ' · ' + u.role : ''); $('#pc-level').textContent = s.level; $('#pc-xp').style.width = (100 * s.xpInto / s.xpNeed) + '%'; $('#pc-xptxt').textContent = `${s.xpInto} / ${s.xpNeed} XP`;
-      $('#pc-rank').textContent = `${s.rank.toUpperCase()} · ${s.rankPoints} RP · K/D ${s.kd} · ${s.wins} Siege / ${s.matches} Matches · ${s.currency} Münzen`;
-      $('#pc-since').textContent = 'Konto seit ' + new Date(u.createdAt).toLocaleDateString('de-DE');
+      $('#pc-rank').textContent = `${s.rank.toUpperCase()} · ${s.rankPoints} RP · ${s.currency} Münzen`;
+      $('#pc-since').textContent = 'Profil ansehen ›';
     } else {
       const need = xpForLevel(d.level);
       $('#pc-name').textContent = (d.name || 'Spieler') + (Account.available ? ' (Gast)' : ''); $('#pc-level').textContent = d.level; $('#pc-xp').style.width = (100 * d.xp / need) + '%'; $('#pc-xptxt').textContent = `${d.xp} / ${need} XP`;
@@ -122,10 +127,64 @@ export class UI {
     }
     const dl = Account.inv && Account.inv.daily; $('#pc-daily').style.display = u && dl && dl.enabled && dl.canClaim ? '' : 'none';
     $('#pc-rename').style.display = u ? 'none' : ''; $('#pc-logout').style.display = u ? '' : 'none'; $('#pc-login').style.display = !u && Account.available ? '' : 'none';
+    $('#pc-since').onclick = $('#pc-name').onclick = () => { if (Account.user) { audio.click(); this.openProfile(null); } };
     const ss = $('#season-sub'); if (ss) ss.textContent = u ? 'Rangliste & Belohnungen' : 'Mit Konto: Rangliste & Belohnungen';
     $('#ach-count').textContent = `${Object.keys(d.ach).length} / ${ACHIEVEMENTS.length}`;
   }
   ensureName(then) { if (!Progress.d.name && !Account.user) { this.afterName = then; this.go('name'); $('#name-input').focus(); return false; } return true; }
+
+  updateSocialDot() {
+    const el = $('#fr-conn'); if (!el) return; const on = Social.connected;
+    el.innerHTML = '<span class="sdot' + (on ? ' on' : '') + '"></span>' + (on ? 'Echtzeit-Verbindung aktiv' : (Account.user ? 'Verbinde Echtzeit-Dienst …' : ''));
+  }
+  showBuild() {
+    const el = $('#build-info'); if (!el) return; const srv = Account.serverBuild;
+    el.textContent = '· Build ' + BUILD + (srv ? ' · Server ' + srv : ''); el.classList.toggle('warn', !!srv && srv !== BUILD);
+    el.title = srv && srv !== BUILD ? 'Spiel und Server haben unterschiedliche Versionen: Seite mit Strg+Shift+R neu laden bzw. den Server (Render) neu deployen.' : 'Spiel- und Server-Version';
+  }
+
+  // ---------- Profil-Bildschirm ----------
+  async openProfile(name) {
+    this.profName = name || null; this.go('profile'); this.g.setMenuView('skins');
+    $('#pf-name').textContent = name || Account.user?.username || ''; $('#pf-stats').replaceChildren(); $('#pf-actions').replaceChildren();
+    let user, online = null, relation = null;
+    if (!name) { await Account.refresh(); try { await Account.loadInventory(); } catch { /* egal */ } user = Account.user; }
+    else { try { const r = await Account.profile(name); user = r.user; online = r.online; } catch (e) { this.toast(e.message, 'bad'); this.back(); return; } }
+    if (!user || this.cur !== 'profile') return;
+    const s = user.stats, self = !name, eq = self ? (Account.inv?.equipped || user.equipped) : user.equipped;
+    this.g.menuOverride = self ? null : { skin: eq?.skin || 'vanguard', wskin: eq?.wskin || 'default' }; this.g.refreshMenuChar();
+    const sk = SKINS.find(x => x.id === eq?.skin) || SKINS[0], ws = WSKINS.find(x => x.id === eq?.wskin) || WSKINS[0];
+    $('#pf-title').textContent = self ? 'Mein Profil' : 'Profil'; const av = $('#pf-av'); av.textContent = user.username.slice(0, 1).toUpperCase(); av.style.background = sk.armor; av.style.borderColor = sk.accent;
+    $('#pf-name').textContent = user.username; $('#pf-lvl').textContent = s.level;
+    const tags = $('#pf-tags'); tags.replaceChildren(); const tag = (t, on) => { const x = document.createElement('span'); x.textContent = t; if (on) x.className = 'on'; tags.appendChild(x); };
+    if (user.role !== 'PLAYER') tag(user.role); if (!self) tag(online ? 'online' : 'offline', online); else tag('du');
+    $('#pf-xp').style.width = (100 * s.xpInto / s.xpNeed) + '%'; $('#pf-xptxt').textContent = s.xpInto + ' / ' + s.xpNeed + ' XP bis Level ' + (s.level + 1);
+    // Rang
+    const COL = { Bronze: '#cd7f32', Silver: '#c0c8d4', Gold: '#ffd25a', Platinum: '#7ee8ff', Diamond: '#6aa8ff', Master: '#c77dff' }, ranks = user.ranks || [], col = COL[s.rank] || '#fff';
+    const rb = $('#pf-rank'); rb.replaceChildren();
+    const badge = document.createElement('div'); badge.className = 'rk-badge'; badge.style.background = col; badge.textContent = s.rank.slice(0, 1);
+    const info = document.createElement('div'); info.className = 'rk-info'; const rn = document.createElement('b'); rn.textContent = s.rank; rn.style.color = col; const sm = document.createElement('small');
+    sm.textContent = s.rankPoints + ' Rangpunkte' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : ' · höchster Rang') + (s.bestRank !== s.rank ? ' · Bestwert: ' + s.bestRank : '');
+    const bar = document.createElement('div'); bar.className = 'rk-bar'; const bi = document.createElement('i'); bi.style.background = col; bi.style.width = (s.nextRankAt ? Math.max(3, 100 * (s.rankPoints - s.rankMin) / (s.nextRankAt - s.rankMin)) : 100) + '%'; bar.appendChild(bi);
+    const tiers = document.createElement('div'); tiers.className = 'rk-tiers'; for (const r of ranks) { const t = document.createElement('span'); t.textContent = r.name + ' ' + r.min; if (r.name === s.rank) { t.className = 'cur'; t.style.background = col; t.style.borderColor = col; } tiers.appendChild(t); }
+    info.append(rn, sm, bar, tiers); rb.append(badge, info); rb.title = 'Rangpunkte gibt es nur in Matches mit mindestens 2 Spielern (z. B. „Match suchen“): Sieg +25 bis +40, Niederlage bis −15.';
+    // Statistiken
+    const losses = Math.max(0, s.matches - s.wins), wr = s.matches ? Math.round(100 * s.wins / s.matches) + ' %' : '–', hs = s.kills ? Math.round(100 * s.headshots / s.kills) + ' %' : '–';
+    const grid = $('#pf-stats'); for (const [v, l] of [[s.matches, 'Matches'], [s.wins, 'Siege'], [losses, 'Niederlagen'], [wr, 'Siegquote'], [s.kd, 'K/D'], [s.kills, 'Kills'], [s.deaths, 'Tode'], [s.headshots, 'Kopftreffer'], [hs, 'HS-Quote']]) { const c = document.createElement('div'); c.className = 'pf-st'; const b = document.createElement('b'); b.textContent = v; const sg = document.createElement('small'); sg.textContent = l; c.append(b, sg); grid.appendChild(c); }
+    const gear = $('#pf-gear'); gear.replaceChildren(); for (const [l, v] of [['Charakter', sk.name], ['Waffen-Skin', ws.name]]) { const d = document.createElement('div'); const sg = document.createElement('small'); sg.textContent = l; const b = document.createElement('b'); b.textContent = v; d.append(sg, b); gear.appendChild(d); }
+    if (self) { try { const se = await Account.season(); if (se.enabled && this.cur === 'profile') { const d = document.createElement('div'); const sg = document.createElement('small'); sg.textContent = 'Season'; const b = document.createElement('b'); b.textContent = se.me.points + ' Punkte' + (se.me.position ? ' · Platz ' + se.me.position : ''); d.append(sg, b); gear.appendChild(d); } } catch { /* optional */ } }
+    $('#pf-since').textContent = 'Konto seit ' + new Date(user.createdAt).toLocaleDateString('de-DE');
+    // Aktionen bei fremden Profilen
+    const act = $('#pf-actions'); act.replaceChildren();
+    if (!self && Account.user) {
+      try { const fr = await Account.friends(); relation = fr.friends.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'friend' : fr.outgoing.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'out' : fr.incoming.some(f => f.username.toLowerCase() === user.username.toLowerCase()) ? 'in' : 'none'; } catch { relation = null; }
+      const btn = (t, f, primary) => { const b = document.createElement('button'); b.className = 'btn small' + (primary ? ' primary' : ''); b.textContent = t; b.onclick = async () => { b.disabled = true; try { await f(); } catch (e) { this.toast(e.message || 'Fehler', 'bad'); } b.disabled = false; }; act.appendChild(b); };
+      if (relation === 'none') btn('Freund hinzufügen', async () => { await Account.friendAction('request', user.username); this.toast('Anfrage gesendet', 'good'); this.openProfile(name); }, true);
+      else if (relation === 'in') btn('Anfrage annehmen', async () => { await Account.friendAction('accept', user.username); this.toast(user.username + ' ist jetzt dein Freund!', 'good'); this.openProfile(name); }, true);
+      else if (relation === 'out') { const t = document.createElement('small'); t.className = 'pf-sm'; t.textContent = 'Freundschaftsanfrage gesendet …'; act.appendChild(t); }
+      else if (relation === 'friend' && online && (!this._party || this._party.isLeader)) btn('Party einladen', () => this.inviteFriend(user.username), true);
+    }
+  }
 
   // ---------- Eigene Dialoge (statt confirm()/prompt() des Browsers) ----------
   // dialog({ title, lines:[…], ok, cancel (null = ohne Abbrechen), danger, input:{ placeholder, min, max, value } }) → Promise<true|false|string|null>
@@ -169,6 +228,11 @@ export class UI {
         { label: 'Ablehnen', run: async () => { try { await Account.friendAction('decline', m.from); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); } } }] });
     });
     Social.listen('friend_accepted', (m) => { this.toast(m.from + ' hat deine Freundschaftsanfrage angenommen!', 'good'); audio.notify(); if (this.cur === 'friends') this.refreshFriends(); });
+    Social.listen('_state', () => this.updateSocialDot());
+    Social.listen('presence', (m) => {   // Freund kommt online / geht offline – Listen aktualisieren, kurzer Hinweis im Menü
+      if (this.cur === 'friends') this.refreshFriends(); if (this.cur === 'lobby') this.refreshLobbyFriends();
+      if (m.online && !this.inMatchNow() && this.cur !== 'hud') this.toast(m.name + ' ist jetzt online', 'event');
+    });
     Social.listen('party', (m) => this.onParty(m.party));
     Social.listen('party_event', (m) => { this.toast(m.text, 'event'); });
     Social.listen('party_invite', (m) => {
@@ -310,7 +374,7 @@ export class UI {
     for (const r of d.top) {
       const row = document.createElement('div'); row.className = 'se-row' + (r.name === Account.user.username ? ' me' : '') + (r.pos <= 3 ? ' top' + r.pos : '');
       const p = document.createElement('span'), n = document.createElement('span'), lv = document.createElement('small'), s = document.createElement('span'); p.className = 'p'; p.textContent = '#' + r.pos; n.className = 'n'; n.textContent = r.name; lv.textContent = 'Lv ' + r.level; s.className = 's'; s.textContent = r.points;
-      row.append(p, n, lv, s); board.appendChild(row);
+      row.append(p, n, lv, s); row.style.cursor = 'pointer'; row.title = 'Profil ansehen'; row.onclick = () => { audio.click(); if (r.name === Account.user.username) this.openProfile(null); else this.openProfile(r.name); }; board.appendChild(row);
     }
     if (d.me.position > 25) $('#se-me-line').textContent = '(du: Platz ' + d.me.position + ')';
   }
@@ -322,13 +386,13 @@ export class UI {
     if (guest) return; this.refreshFriends(); this.frTimer = setInterval(() => { if (this.cur === 'friends') this.refreshFriends(); else clearInterval(this.frTimer); }, 6000);
   }
   async refreshFriends() {
-    let d; try { d = await Account.friends(); } catch (e) { this.toast(e.message, 'bad'); return; }
+    this.updateSocialDot(); let d; try { d = await Account.friends(); } catch (e) { this.toast(e.message, 'bad'); return; }
     const row = (name, extra, actions) => { const r = document.createElement('div'); r.className = 'room'; const l = document.createElement('div'); l.style.display = 'flex'; l.style.alignItems = 'center'; l.style.gap = '10px'; l.innerHTML = extra; l.querySelector('.fn').textContent = name; const a = document.createElement('div'); a.style.display = 'flex'; a.style.gap = '8px'; for (const [t, f] of actions) { const b = document.createElement('button'); b.className = 'btn small'; b.textContent = t; b.onclick = (e) => { e.stopPropagation(); f(); }; a.appendChild(b); } r.append(l, a); return r; };
     const act = (kind, name, msg) => async () => { try { await Account.friendAction(kind, name); audio.click(); if (msg) this.toast(msg, 'good'); this.refreshFriends(); } catch (e) { this.toast(e.message, 'bad'); audio.error(); } };
     const list = $('#fr-list'); list.replaceChildren(); $('#fr-total').textContent = '(' + d.friends.length + ')';
     if (!d.friends.length) list.innerHTML = '<div class="empty">Noch keine Freunde. Suche links nach Spielernamen.</div>';
     for (const f of d.friends) {
-      const acts = []; if (this._party?.members.some(m => m.name.toLowerCase() === f.username.toLowerCase())) acts.push(['In deiner Party', () => {}]); else if (f.online && !f.inMatch && (!this._party || this._party.isLeader)) acts.push(['Party einladen', () => this.inviteFriend(f.username)]); if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', async () => { if (await this.confirm({ title: 'Freund entfernen?', lines: [f.username + ' wird aus deiner Freundesliste entfernt.', { cls: '', text: 'Ihr könnt euch jederzeit wieder hinzufügen.' }], ok: 'Entfernen', danger: true })) act('remove', f.username)(); }]);
+      const acts = [['Profil', () => this.openProfile(f.username)]]; if (this._party?.members.some(m => m.name.toLowerCase() === f.username.toLowerCase())) acts.push(['In deiner Party', () => {}]); else if (f.online && !f.inMatch && (!this._party || this._party.isLeader)) acts.push(['Party einladen', () => this.inviteFriend(f.username)]); if (f.room) acts.push(['Beitreten', () => this.joinRoom(f.room)]); acts.push(['✕', async () => { if (await this.confirm({ title: 'Freund entfernen?', lines: [f.username + ' wird aus deiner Freundesliste entfernt.', { cls: '', text: 'Ihr könnt euch jederzeit wieder hinzufügen.' }], ok: 'Entfernen', danger: true })) act('remove', f.username)(); }]);
       list.appendChild(row(f.username, `<span style="width:10px;height:10px;border-radius:50%;background:${f.online ? 'var(--good)' : '#556'};box-shadow:${f.online ? '0 0 8px var(--good)' : 'none'}"></span><b class="fn"></b><small>Lv ${f.level} · ${f.rank} · ${f.online ? (f.inMatch ? 'im Match' : f.room ? 'in einer Lobby' : 'online') : 'offline'}</small>`, acts));
     }
     const inn = $('#fr-in'); inn.replaceChildren(); if (!d.incoming.length) inn.innerHTML = '<div class="empty">Keine offenen Anfragen.</div>';

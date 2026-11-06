@@ -208,6 +208,22 @@ await mq(pF.sk, 'v2'); pG.sk.ws.send(JSON.stringify({ k: 'party_leave' })); cons
 await call('POST', '/api/admin/flag', { key: 'matchmaking', value: false }, ow.token); mD.sk.got.forEach(m => { m._seen = true; }); assert.match((await mq(mD.sk, 'ffa')).error, /deaktiviert/); await call('POST', '/api/admin/flag', { key: 'matchmaking', value: true }, ow.token); ok('Feature-Flag schaltet das Matchmaking ab');
 for (const x of [mA, mB, mC, mD, mE, pF, pG]) x.sk.ws.close();
 
+console.log('Profil, Online-Status, Version');
+const z_pf = await call('GET', '/api/profile/Pusha', null, ow.token); assert.equal(z_pf.s, 200); assert.equal(z_pf.user.username, 'Pusha'); assert.equal(z_pf.user.stats.currency, undefined); assert.ok(z_pf.user.equipped.skin && z_pf.user.equipped.wskin); assert.ok(z_pf.user.ranks.length >= 6 && z_pf.user.stats.rankMin >= 0 && z_pf.user.stats.nextRank); assert.equal(typeof z_pf.online, 'boolean'); ok('Fremdes Profil: Skin/Waffen-Skin, Rang-Daten – aber KEINE Münzen');
+const z_mine = await call('GET', '/api/me', null, ow.token); assert.equal(typeof z_mine.user.stats.currency, 'number'); assert.ok(z_mine.user.equipped); ok('Eigenes Profil enthält Münzen und Ausrüstung');
+assert.ok(!JSON.stringify(z_pf).match(/password|token|hash/i)); ok('Profil-Antwort enthält keine geheimen Felder');
+assert.equal((await call('GET', '/api/profile/NichtDa', null, ow.token)).s, 404); assert.equal((await call('GET', '/api/profile/x', null)).s, 401); ok('Unbekanntes Profil: 404, ohne Anmeldung: 401');
+const z_st0 = await call('GET', '/api/status'); assert.match(z_st0.build, /^\d{4}-\d{2}-\d{2}\.\d+$/); const z_hl = await fetch(base + '/health').then(r => r.json()); assert.equal(z_hl.build, z_st0.build); ok('Server meldet seine Version (/api/status und /health) – so erkennt man veraltete Deployments');
+// Online-Meldung an Freunde in Echtzeit
+const z_pr1 = await reg('Presa', 'Passw0rd!x', {}, '16.0.0.1'), z_pr2 = await reg('Presb', 'Passw0rd!x', {}, '16.0.0.2');
+await call('POST', '/api/friends/request', { target: 'Presb' }, z_pr1.token); await call('POST', '/api/friends/accept', { target: 'Presa' }, z_pr2.token);
+const z_ps1 = await q_openSocial(z_pr1.token); assert.equal((await call('GET', '/api/friends', null, z_pr1.token)).friends[0].online, false); const z_ps2 = await q_openSocial(z_pr2.token);
+const z_pon = await z_ps1.wait('presence'); assert.ok(z_pon && z_pon.name === 'Presb' && z_pon.online === true); assert.equal((await call('GET', '/api/friends', null, z_pr1.token)).friends[0].online, true); ok('Freund kommt online → du bekommst es sofort gemeldet und er steht als online in der Liste');
+z_ps2.ws.close(); await q_nap(4600); const z_poff = await z_ps1.wait('presence', 500); assert.ok(z_poff && z_poff.online === false); assert.equal((await call('GET', '/api/friends', null, z_pr1.token)).friends[0].online, false); ok('Freund geht offline → Meldung nach kurzer Verzögerung (Reload-Flackern wird vermieden)');
+const z_ps3 = await q_openSocial(z_pr2.token); const z_pon2 = await z_ps1.wait('presence'); assert.ok(z_pon2 && z_pon2.online === true); z_ps3.ws.close(); await q_nap(100); const z_ps4 = await q_openSocial(z_pr2.token); await q_nap(4800); assert.equal((await call('GET', '/api/friends', null, z_pr1.token)).friends[0].online, true); ok('Schneller Reconnect (Seite neu laden) lässt den Freund online – kein falsches „offline“');
+const z_pstr = await q_openSocial(z_pr2.token); assert.equal(z_pstr.got[0].k, 'welcome'); ok('Mehrere Tabs/Geräte desselben Kontos gleichzeitig sind erlaubt');
+for (const x of [z_ps1, z_ps3, z_ps4, z_pstr]) x.ws.close();
+
 console.log('Multiplayer-Anbindung');
 const g1 = await wsHello({ name: 'Alice' }); assert.ok(g1.m.name.startsWith('Alice') && g1.m.name !== 'Alice' && g1.m.account === false); ok('Gast darf keinen registrierten Namen übernehmen');
 const w1 = await wsHello({ token: al.token, name: 'Hacker' }); assert.equal(w1.m.name, 'Carol'); assert.equal(w1.m.account, true); ok('Angemeldeter Spieler: Name kommt vom Server, nicht vom Client');

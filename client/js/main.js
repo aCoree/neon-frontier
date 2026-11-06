@@ -22,9 +22,11 @@ async function boot() {
   const engine = new Engine(canvas, params.get('q') || S.quality || 'high');
   const setP = (p, t) => { $('#load-bar').style.width = Math.round(p * 100) + '%'; $('#load-text').textContent = t; };
   await engine.init(setP);
-  await Promise.race([Account.init(), new Promise(r => setTimeout(r, 3500))]);   // Konten (optional): Server nicht erreichbar → Gast-Modus
+  const accInit = Account.init();
+  await Promise.race([accInit, new Promise(r => setTimeout(r, 3500))]);   // Konten (optional): Server nicht erreichbar → Gast-Modus
   const game = new Game(engine, canvas); const ui = new UI(game); game.ui = ui; window.game = game;
   ui.init(); ui.checkFriendRequests(); Social.start();
+  accInit.then(() => { ui.refreshProfile(); ui.checkFriendRequests(); Social.start(); ui.showBuild(); });   // langsamer Server (z. B. Render-Kaltstart): Konto und Online-Dienst nachziehen
   audio.setVolumes({ master: S.master, music: S.music, sfx: S.sfx, ambient: S.ambient });
   game.enterMenu(); window.__bootMs = Math.round(performance.now());
   $('#loading').classList.add('hide'); setTimeout(() => { $('#loading').style.display = 'none'; }, 900);

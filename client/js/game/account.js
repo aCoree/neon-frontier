@@ -16,7 +16,7 @@ export const Account = {
   async init() {
     this.load();
     try {
-      const s = await this.req('GET', '/api/status'); this.available = !!s.accounts; this.maintenance = !!s.maintenance; this.flags = s.flags || {};
+      const s = await this.req('GET', '/api/status'); this.available = !!s.accounts; this.serverBuild = s.build || ''; this.maintenance = !!s.maintenance; this.flags = s.flags || {};
       if (this.available && this.token) { try { const m = await this.req('GET', '/api/me'); this.user = m.user; this.mutes = new Set(m.mutes); } catch (e) { if (e.status === 401 || e.status === 403) this.setToken(null); } }
       if (this.user) await this.loadInventory();
     } catch { this.available = false; }
@@ -34,6 +34,7 @@ export const Account = {
   friends() { return this.req('GET', '/api/friends'); },
   search(q, after) { return this.req('GET', '/api/players/search?q=' + encodeURIComponent(q) + (after ? '&after=' + encodeURIComponent(after) : '')); },
   friendAction(kind, target) { return this.req('POST', '/api/friends/' + kind, { target }); },
+  profile(name) { return this.req('GET', '/api/profile/' + encodeURIComponent(name)); },
   season() { return this.req('GET', '/api/season'); },
   async claimSeason(tier) { const r = await this.req('POST', '/api/season/claim', { tier }); await this.refresh(); return r; },
   async refresh() { if (!this.token) return; try { const m = await this.req('GET', '/api/me'); this.user = m.user; } catch { /* ignorieren */ } },

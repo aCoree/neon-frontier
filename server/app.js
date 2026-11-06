@@ -10,6 +10,7 @@ import { Api } from './lib/api.js';
 import { Analytics } from './lib/analytics.js';
 import { Parties } from './lib/party.js';
 import { Matchmaker, MM_MODES } from './lib/matchmaker.js';
+import { BUILD } from '../client/js/version.js';
 import { applyMatchResult } from './lib/progression.js';
 import { can, filterText } from './lib/auth.js';
 
@@ -33,6 +34,11 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
   const sockets = new Map();   // userId -> Anzahl offener WebSocket-Verbindungen (angemeldet)
   const social = new Map();    // userId -> Set(client): dauerhafte „Social“-Verbindung im Menü (Echtzeit-Hinweise, Einladungen)
   const parties = new Parties({ send: (id, m) => notify(id, m), isOnline: (id) => (social.get(Number(id))?.size || 0) > 0 });
+  const announced = new Map();   // userId -> zuletzt gemeldeter Online-Status
+  const announce = async (userId, name, online) => {
+    if (announced.get(userId) === online) return; announced.set(userId, online); if (!online) announced.delete(userId);
+    try { for (const fid of await api.friendIds(userId)) if (social.get(fid)?.size) notify(fid, { k: 'presence', name, online }); } catch { /* optional */ }
+  };
   const notify = (userId, msg) => { const s = social.get(Number(userId)); if (!s || !s.size) return false; for (const c of s) c.send(msg); return true; };
   const presence = (userId) => {
     const online = (sockets.get(userId) || 0) > 0; if (!online) return { online: false };
@@ -92,7 +98,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     const url = decodeURIComponent((req.url || '/').split('#')[0]);
     const route = url.split('?')[0];
     try { if (await api.handle(req, res, url)) return; } catch (e) { log.error('[http]', e); res.writeHead(500); return res.end(); }
-    if (route === '/health') return json(res, { ok: true, rooms: rooms.size, players: playersOnline(), accounts: !!db, maintenance: api.maintenance });
+    if (route === '/health') return json(res, { ok: true, build: BUILD, commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || undefined, rooms: rooms.size, players: playersOnline(), social: social.size, accounts: !!db, maintenance: api.maintenance });
     if (route === '/metrics') return json(res, metricsSnapshot());
     if (route === '/rooms') return json(res, [...rooms.values()].filter(r => r.state === 'lobby' && r.settings.public && r.humans().length).map(r => ({ code: r.code, host: r.members.get(r.hostId)?.name || '?', mode: MODES[r.settings.mode].name, players: r.humans().length })));
     if (!serveClient) { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('NEON FRONTIER game server. WebSocket on this port.'); }
@@ -130,7 +136,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
         if (msg.social) {   // reine Hinweis-Verbindung: nur für angemeldete Spieler, höchstens 5 pro Konto, kann keine Räume betreten
           if (!acct) { client.send({ k: 'err', code: 'nosocial', text: 'Nicht angemeldet.' }); client.close(); return; }
           const set = social.get(profile.userId) || new Set(); if (set.size >= 5) { client.send({ k: 'err', code: 'toomany', text: 'Zu viele Verbindungen.' }); client.close(); return; }
-          set.add(client); social.set(profile.userId, set); client.social = true; profile.social = true; parties.touch(profile.userId, { name: profile.name, level: profile.level, skin: profile.skin, wskin: profile.wskin });
+          set.add(client); social.set(profile.userId, set); client.social = true; profile.social = true; if (!announced.get(profile.userId)) announce(profile.userId, profile.name, true); parties.touch(profile.userId, { name: profile.name, level: profile.level, skin: profile.skin, wskin: profile.wskin });
         }
         if (acct && profile.userId && !client.counted) { client.counted = profile.userId; sockets.set(profile.userId, (sockets.get(profile.userId) || 0) + 1); }
         client.send({ k: 'welcome', v: 2, serverTime: Date.now(), account: !!acct, name: profile.name, role: acct ? acct.role : 'GUEST' }); return;
@@ -208,7 +214,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       chain = chain.then(() => onMessage(msg)).catch((e) => { M.errors++; log.error('Fehler bei Nachricht', msg.k, e); });  // Nachrichten pro Verbindung strikt nacheinander
     });
     function leave() { if (room && member) { try { room.removeMember(member, true); } catch (e) { log.error(e); } } room = null; member = null; }
-    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) { social.delete(profile.userId); parties.drop(profile.userId); mm.cancelUser(profile.userId, 'Verbindung verloren.'); } } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
+    ws.on('close', () => { if (client.social && profile) { const set = social.get(profile.userId); if (set) { set.delete(client); if (!set.size) { social.delete(profile.userId); const who = { id: profile.userId, name: profile.name }; setTimeout(() => { if (!social.get(who.id)?.size) announce(who.id, who.name, false); }, 4000).unref?.(); parties.drop(profile.userId); mm.cancelUser(profile.userId, 'Verbindung verloren.'); } } } if (client.counted) { const n = (sockets.get(client.counted) || 1) - 1; n > 0 ? sockets.set(client.counted, n) : sockets.delete(client.counted); } if (room && member) { try { if (room.state === 'lobby') room.removeMember(member, true); else room.removeMember(member, false); } catch (e) { log.error(e); } } });
     ws.on('error', () => {});
   });
 

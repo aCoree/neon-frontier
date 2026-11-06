@@ -14,13 +14,15 @@ export async function connectPg(url) {
   });
 }
 
+const INT8_AS_TEXT = { parsers: { 20: (v) => v } };
 export async function connectPglite(dir) {
   const { PGlite } = await import('@electric-sql/pglite');
   const db = dir ? new PGlite(dir) : new PGlite();
   await db.waitReady;
   return wrap({
-    query: (t, p) => db.query(t, p),
-    tx: (fn) => db.transaction((t) => fn({ query: (q, p) => t.query(q, p) })),
+    // Wie das echte "pg": BIGINT (OID 20) kommt als Text zurück – so fallen Typfehler (Zahl vs. Text) schon in den Tests auf
+    query: (t, p) => db.query(t, p, INT8_AS_TEXT),
+    tx: (fn) => db.transaction((t) => fn({ query: (q, p) => t.query(q, p, INT8_AS_TEXT) })),
     close: () => db.close(),
   });
 }

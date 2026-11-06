@@ -27,21 +27,17 @@
   <div class="menu-left">
     <div class="logo"><span>NEON</span><b>FRONTIER</b><small>3D MULTIPLAYER SHOOTER</small></div>
     <nav class="menu-btns">
-      <button class="mbtn mm" data-go="mm"><i>⚔</i><span>Match suchen<small id="mm-sub">Gegen Spieler online</small></span></button>
-      <button class="mbtn" data-go="solo"><i>▶</i><span>Spielen<small>Solo gegen Bots</small></span></button>
-      <button class="mbtn" data-go="multi"><i>◈</i><span>Multiplayer<small>Mit Freunden online</small></span></button>
-      <button class="mbtn" data-act="private"><i>⚿</i><span>Private Lobby<small>Raum + Einladungslink</small></span></button>
-      <button class="mbtn" data-act="training"><i>◎</i><span>Training<small>Schießstand &amp; alle Waffen</small></span></button>
+      <button class="mbtn play" data-go="play"><i>▶</i><span>Spielen<small>Match suchen · Bots · Lobbys · Training</small></span></button>
       <button class="mbtn" data-go="skins"><i>✦</i><span>Skins<small>Charaktere &amp; Waffen</small></span></button>
       <button class="mbtn" data-go="season"><i>♛</i><span>Season<small id="season-sub">Rangliste &amp; Belohnungen</small></span></button>
       <button class="mbtn" data-go="friends"><i>☺</i><span>Freunde<small id="fr-count">Suchen &amp; einladen</small></span></button>
       <button class="mbtn" data-go="ach"><i>★</i><span>Erfolge<small id="ach-count">0 / 14</small></span></button>
       <button class="mbtn" data-go="settings"><i>⚙</i><span>Einstellungen<small>Grafik, Audio, Steuerung</small></span></button>
     </nav>
-    <div class="menu-foot"><b style="color:var(--c1)">NEON FRONTIER</b> · © Aurelio Zingarello<br>WASD · Maus · Leertaste · Shift · C · Q (Dash) · F (Gadget) · Tab · <a href="#" id="link-help">Alle Tasten</a></div>
+    <div class="menu-foot"><b style="color:var(--c1)">NEON FRONTIER</b> · © Aurelio Zingarello <span id="build-info"></span><br>WASD · Maus · Leertaste · Shift · C · Q (Dash) · F (Gadget) · Tab · <a href="#" id="link-help">Alle Tasten</a></div>
   </div>
   <div class="profile-chip" id="profile-chip">
-    <div class="pc-name" id="pc-name">Spieler</div>
+    <div class="pc-name" id="pc-name" title="Profil ansehen">Spieler</div>
     <div class="pc-lvl"><span id="pc-level">1</span><div class="pc-bar"><i id="pc-xp"></i></div><small id="pc-xptxt">0 / 0 XP</small></div>
     <div class="pc-rank" id="pc-rank"></div>
     <div class="pc-acct"><button class="link" id="pc-rename">Name ändern</button> <button class="link" id="pc-login">Anmelden / Registrieren</button> <button class="link" id="pc-daily" style="display:none;color:var(--c3)">🎁 Tagesbelohnung abholen</button> <button class="link" id="pc-logout" style="display:none">Abmelden</button></div>
@@ -82,7 +78,7 @@
 <!-- ================= FREUNDE ================= -->
 <section id="s-friends" class="screen">
   <div class="panel wide">
-    <header><button class="back" data-back>‹ Zurück</button><h2>Freunde</h2></header>
+    <header><button class="back" data-back>‹ Zurück</button><h2>Freunde</h2><small class="pf-sm" id="fr-conn"></small></header>
     <div id="fr-guest" class="empty" style="display:none">Melde dich mit einem Konto an, um Freunde hinzuzufügen. <button class="link" id="fr-login">Anmelden</button></div>
     <div class="grid2" id="fr-main">
       <div>
@@ -121,6 +117,34 @@
         <div class="rooms se-board" id="se-board" style="max-height:62vh"></div>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ================= SPIELEN ================= -->
+<section id="s-play" class="screen">
+  <div class="panel wide">
+    <header><button class="back" data-back>‹ Zurück</button><h2>Spielen</h2></header>
+    <div class="play-grid">
+      <button class="ptile hot" data-go="mm"><i>⚔</i><b>Match suchen</b><span id="mm-sub">Online gegen andere Spieler – nach Rang</span><em>EMPFOHLEN</em></button>
+      <button class="ptile" data-go="solo"><i>▶</i><b>Gegen Bots</b><span>Alle Modi, du stellst Schwierigkeit und Dauer ein</span></button>
+      <button class="ptile" data-go="multi"><i>◈</i><b>Multiplayer</b><span>Offene Räume ansehen oder per Raumcode beitreten</span></button>
+      <button class="ptile" data-act="private"><i>⚿</i><b>Private Lobby</b><span>Eigene Lobby mit Einladungslink für Freunde</span></button>
+      <button class="ptile" data-act="training"><i>◎</i><b>Training</b><span>Schießstand mit allen Waffen und Gadgets</span></button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROFIL ================= -->
+<section id="s-profile" class="screen">
+  <div class="skins-left panel prof">
+    <header><button class="back" data-back>‹ Zurück</button><h2 id="pf-title">Profil</h2></header>
+    <div class="pf-head"><div class="pf-av" id="pf-av">?</div><div class="pf-id"><div class="pf-name" id="pf-name"></div><div class="pf-tags" id="pf-tags"></div></div><div class="pf-lvl"><b id="pf-lvl">1</b><small>LEVEL</small></div></div>
+    <div class="xb pf-xb"><i id="pf-xp" style="width:0%"></i></div><small class="pf-sm" id="pf-xptxt"></small>
+    <div class="pf-rank" id="pf-rank"></div>
+    <div class="pf-stats" id="pf-stats"></div>
+    <div class="pf-gear" id="pf-gear"></div>
+    <div class="row" id="pf-actions"></div>
+    <p class="pf-since" id="pf-since"></p>
   </div>
 </section>
 

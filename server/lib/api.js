@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { hashPassword, verifyPassword, newToken, hashToken, validateUsername, validatePassword, RateLimiter, can, ROLE_RANK } from './auth.js';
 import { rankOf, levelFromXp, RANKS, grantUnlocks } from './progression.js';
 import { exportBackup } from './backup.js';
+import { BUILD } from '../../client/js/version.js';
 import { CATALOG, CATALOG_BY_ID, DAILY_REWARDS, SEASON_TIERS, seasonOf } from '../../client/js/shared/defs.js';
 
 const SESSION_DAYS = 30;
@@ -53,10 +54,11 @@ export class Api {
     return u;
   }
   async authReq(req) { const h = String(req.headers.authorization || ''); return this.userFromToken(h.startsWith('Bearer ') ? h.slice(7) : null); }
-  async publicUser(u) {
+  async publicUser(u, self = true) {
     const s = await this.db.one('SELECT * FROM user_stats WHERE user_id=$1', [u.id]); const lv = levelFromXp(Number(s.xp));
     const rank = rankOf(s.rank_points), next = RANKS.find(r => r.min > s.rank_points);
-    return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, bestRank: rankOf(s.best_rank_points), nextRankAt: next ? next.min : null, currency: Number(s.currency) } };
+    return { id: Number(u.id), username: u.username, role: u.role, createdAt: u.created_at, stats: { xp: Number(s.xp), level: lv.level, xpInto: lv.into, xpNeed: lv.need, kills: s.kills, deaths: s.deaths, headshots: s.headshots, matches: s.matches, wins: s.wins, kd: s.deaths ? +(s.kills / s.deaths).toFixed(2) : s.kills, rankPoints: s.rank_points, rank, rankMin: RANKS.filter(r => r.min <= s.rank_points).pop().min, bestRank: rankOf(s.best_rank_points), nextRank: next ? next.name : null, nextRankAt: next ? next.min : null, ...(self ? { currency: Number(s.currency) } : {}) },
+      equipped: { skin: s.equipped_skin, wskin: s.equipped_wskin }, ranks: RANKS };
   }
   // Gibt den Freund zurück (nur bei akzeptierter Freundschaft), sonst null – Grundlage für Einladungen
   async friendByName(userId, name) {
@@ -64,6 +66,8 @@ export class Api {
     return this.db.one(`SELECT u.id, u.username FROM users u JOIN friendships f ON f.status='accepted' AND ((f.requester=$1 AND f.addressee=u.id) OR (f.addressee=$1 AND f.requester=u.id))
       WHERE u.username_lower=$2 AND NOT u.ban_permanent AND (u.banned_until IS NULL OR u.banned_until < now())`, [userId, n]);
   }
+  // IDs aller bestätigten Freunde (für Online-Meldungen in Echtzeit)
+  async friendIds(userId) { return (await this.db.all("SELECT CASE WHEN requester=$1 THEN addressee ELSE requester END AS id FROM friendships WHERE status='accepted' AND (requester=$1 OR addressee=$1)", [userId])).map(r => Number(r.id)); }
   // Echtzeit-Hinweis an alle Verbindungen des Spielers – aber nicht, wenn er den Absender stummgeschaltet hat
   async push(targetId, fromUser, msg) {
     try { if ((await this.mutedBy(targetId)).has(String(fromUser.id))) return false; return !!this.notify(targetId, msg); } catch { return false; }
@@ -225,7 +229,7 @@ export class Api {
     try {
       const ip = this.ip(req);
       if (this.rl.hit('api:' + ip, 240, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' }), true;
-      if (url === '/api/status') return this.send(res, 200, { accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop, friends: this.flags.friends, seasons: this.flags.seasons, matchmaking: this.flags.matchmaking } }), true;
+      if (url === '/api/status') return this.send(res, 200, { build: BUILD, accounts: !!this.db && this.flags.accounts, maintenance: this.maintenance, flags: { ranked: this.flags.ranked, chat: this.flags.chat, emotes: this.flags.emotes, dailyRewards: this.flags.dailyRewards, shop: this.flags.shop, friends: this.flags.friends, seasons: this.flags.seasons, matchmaking: this.flags.matchmaking } }), true;
       if (!this.db || !this.flags.accounts) return this.send(res, 503, { error: 'Konten sind auf diesem Server nicht aktiviert.' }), true;
       const m = req.method;
       if (m === 'POST' && url === '/api/register') return await this.register(req, res, ip), true;
@@ -239,7 +243,7 @@ export class Api {
         if (this.rl.hit('prof:' + user.id, 60, 60000)) return this.send(res, 429, { error: 'Zu viele Anfragen.' }), true;
         const t = await this.db.one('SELECT * FROM users WHERE username_lower=$1', [decodeURIComponent(url.slice(13)).toLowerCase().slice(0, 16)]);
         if (!t) return this.send(res, 404, { error: 'Spieler nicht gefunden.' }), true;
-        return this.send(res, 200, { user: await this.publicUser(t) }), true;
+        return this.send(res, 200, { user: await this.publicUser(t, false), online: !!this.presence(Number(t.id)).online }), true;
       }
       if (url.startsWith('/api/friends') || url.startsWith('/api/players/search')) return await this.friendsRoute(req, res, url, user), true;
       if (m === 'GET' && url === '/api/inventory') return this.send(res, 200, await this.inventory(user)), true;

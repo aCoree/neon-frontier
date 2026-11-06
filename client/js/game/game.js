@@ -484,11 +484,11 @@ export class Game {
     this.view.updateLOD(new THREE.Vector3(MENU_POS.x, 0, MENU_POS.z), true);
   }
   ensureMenuChar() {
-    const d = Progress.d;
+    const d = this.menuOverride || Progress.d;
     if (this.menuChar && (this.menuChar.skin.id !== d.skin || this.menuChar.wskinId !== d.wskin)) { this.scene.remove(this.menuChar.root); this.menuChar = null; }
     if (!this.menuChar) {
       this.menuChar = new Character(d.skin, d.wskin); this.scene.add(this.menuChar.root);
-      this.menuChar.setWeapon(d.menuWeapon || 'striker'); this.menuChar.equipT = 1;
+      this.menuChar.setWeapon(Progress.d.menuWeapon || 'striker'); this.menuChar.equipT = 1;
       this.menuChar.root.position.set(MENU_POS.x, MENU_POS.y, MENU_POS.z); this.menuChar.root.rotation.y = Math.PI;
     }
   }
