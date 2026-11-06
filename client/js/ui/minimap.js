@@ -6,8 +6,8 @@ export class Minimap {
   constructor(canvas, game) {
     this.cv = canvas; this.ctx = canvas.getContext('2d'); this.g = game; this.R = 74; this.base = this.makeBase(game); this.t = 0;
   }
-  makeBase(g) {
-    const S = 256, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d'), map = g.map, view = g.view;
+  makeBase(g, S = 256) {
+    const c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d'), map = g.map, view = g.view;
     const img = x.createImageData(S, S);
     for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
       const wx = -200 + (i + 0.5) * 400 / S, wz = -200 + (j + 0.5) * 400 / S, h = map.terrainY(wx, wz);

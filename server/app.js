@@ -74,13 +74,13 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
     valid: (t) => t.members.every(m => (social.get(m.userId)?.size || 0) > 0) && (!t.party || (() => { const p = parties.parties.get(t.party); return !!p && p.members.length === t.members.length && t.members.every(m => p.members.includes(m.userId)); })()),
     onStatus: (t, st) => { for (const m of t.members) notify(m.userId, { k: 'mm_status', ...st }); },
     onCancel: (t, reason) => { for (const m of t.members) notify(m.userId, { k: 'mm_cancelled', reason }); },
-    onMatch: ({ mode, tickets, humans, bots, filled }) => {
+    onMatch: ({ mode, ranked, tickets, humans, bots, filled }) => {
       const code = newCode(), cfg = MM_MODES[mode], hooks = hooksFor();
-      const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false }, hooks }); hooks.room = room;
+      const room = new Room(code, { settings: { mode, bots: cfg.bots ? bots : 0, diff: 'normal', fillBots: true, timeLimit: 6, tod: 'day', public: false }, hooks, ranked: !!ranked && !!api.flags.ranked }); hooks.room = room;
       room.mm = { expect: new Set(tickets.flatMap(t => t.members.map(m => m.userId))), created: Date.now(), deadline: Date.now() + 25000 };
       rooms.set(code, room); stats.inc('mm_match', mode); if (filled) stats.inc('mm_filled', mode);
       log.log(`[mm] ${mode}: ${humans} Spieler${filled ? ' + Bots' : ''} → Raum ${code}`);
-      for (const t of tickets) for (const m of t.members) notify(m.userId, { k: 'mm_found', code, mode, humans, bots: cfg.bots ? bots : Math.max(0, cfg.cap - humans), filled });
+      for (const t of tickets) for (const m of t.members) notify(m.userId, { k: 'mm_found', code, mode, ranked: !!room.settings.ranked, humans, bots: cfg.bots ? bots : Math.max(0, cfg.cap - humans), filled });
     },
   });
   // Matchmaking-Räume starten automatisch, sobald alle da sind – oder nach der Frist mit den Anwesenden
@@ -144,7 +144,7 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       if (client.social) { await handleSocial(msg); return; }   // Social-Verbindungen verstehen nur party_*-Befehle
       if (msg.k === 'create') {
         if (!profile) return; if (room) leave();
-        const code = newCode(), hooks = hooksFor(); room = new Room(code, { settings: msg.settings, hooks }); hooks.room = room;
+        const code = newCode(), hooks = hooksFor(); room = new Room(code, { settings: msg.settings, hooks });   // ranked wird im Konstruktor immer auf false gesetzt – nur Matchmaking erzeugt Ranked-Räume hooks.room = room;
         rooms.set(code, room); profile.party = parties.partyIdOf(profile.userId); member = room.addMember(client, profile); loadMutes();
         log.log(`[room ${code}] erstellt von ${member.name}`); return;
       }
@@ -173,8 +173,8 @@ export function createApp({ db = null, config = {}, serveClient = true, log = co
       const p = parties.get(uid); if (p && p.leader !== uid) return reply(false, 'Nur der Party-Leiter kann ein Match suchen.');
       const ids = p ? p.members : [uid]; for (const id of ids) if (!(social.get(id)?.size)) return reply(false, parties.name(id) + ' ist nicht verbunden.');
       const rows = await db.all('SELECT user_id, rank_points FROM user_stats WHERE user_id = ANY($1::bigint[])', [ids]), rp = new Map(rows.map(r => [Number(r.user_id), r.rank_points]));
-      const r = mm.queue({ members: ids.map(id => ({ userId: id, name: id === uid ? profile.name : parties.name(id), rating: rp.get(id) || 0 })), mode: String(msg.mode || ''), party: p ? p.id : 0 });
-      if (r.ok) stats.inc('mm_queue', String(msg.mode)); return reply(r.ok, r.error, { mode: msg.mode });
+      const r = mm.queue({ members: ids.map(id => ({ userId: id, name: id === uid ? profile.name : parties.name(id), rating: rp.get(id) || 0 })), mode: String(msg.mode || ''), party: p ? p.id : 0, ranked: msg.ranked === true });
+      if (r.ok) stats.inc('mm_queue', String(msg.mode) + (msg.ranked === true ? '-ranked' : '')); return reply(r.ok, r.error, { mode: msg.mode });
     }
     // Party-Befehle über die Social-Verbindung. Alle Rechte prüft der Server: nur Freunde einladen, nur der Leiter lädt ein/entfernt/nimmt mit.
     async function handleSocial(msg) {

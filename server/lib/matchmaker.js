@@ -22,13 +22,13 @@ export class Matchmaker {
   ticketOf(userId) { return this.byUser.get(Number(userId)) || null; }
   size() { return this.tickets.size; }
   // members: [{ userId, name, rating }] – Party oder Einzelspieler. party: Party-ID (0 = Einzelspieler)
-  queue({ members, mode, party = 0 }) {
+  queue({ members, mode, party = 0, ranked = false }) {
     const cfg = MM_MODES[mode]; if (!cfg) return { ok: false, error: 'Unbekannter Spielmodus.' };
     if (!members.length) return { ok: false, error: 'Keine Spieler.' };
     if (cfg.team && members.length > cfg.team) return { ok: false, error: `Eure Party (${members.length}) passt nicht in ${cfg.name} (Teamgröße ${cfg.team}).` };
     if (members.length > cfg.cap) return { ok: false, error: 'Die Party ist zu groß für diesen Modus.' };
     for (const m of members) if (this.byUser.has(Number(m.userId))) return { ok: false, error: (members.length > 1 ? m.name + ' sucht' : 'Du suchst') + ' bereits ein Match.' };
-    const t = { id: ++this.seq, mode, party, members: members.map(m => ({ userId: Number(m.userId), name: m.name, rating: Math.max(0, m.rating | 0) })), since: this.now(), lastStatus: 0 };
+    const t = { id: ++this.seq, mode, ranked: !!ranked, party, members: members.map(m => ({ userId: Number(m.userId), name: m.name, rating: Math.max(0, m.rating | 0) })), since: this.now(), lastStatus: 0 };
     t.rating = Math.round(t.members.reduce((a, m) => a + m.rating, 0) / t.members.length);
     this.tickets.set(t.id, t); for (const m of t.members) this.byUser.set(m.userId, t);
     this.onStatus(t, this.status(t, [t])); return { ok: true, ticket: t };
@@ -36,12 +36,12 @@ export class Matchmaker {
   cancel(ticketId, reason) { const t = this.tickets.get(ticketId); if (!t) return false; this.drop(t); if (reason !== null) this.onCancel(t, reason); return true; }
   cancelUser(userId, reason) { const t = this.ticketOf(userId); return t ? this.cancel(t.id, reason) : false; }
   drop(t) { this.tickets.delete(t.id); for (const m of t.members) if (this.byUser.get(m.userId) === t) this.byUser.delete(m.userId); }
-  status(t, group) { const cfg = MM_MODES[t.mode], found = group.reduce((n, x) => n + x.members.length, 0), w = this.now() - t.since; return { mode: t.mode, waited: Math.round(w / 1000), found, cap: cfg.cap, stage: w >= this.max - 5000 ? 'filling' : 'searching' }; }
+  status(t, group) { const cfg = MM_MODES[t.mode], found = group.reduce((n, x) => n + x.members.length, 0), w = this.now() - t.since; return { mode: t.mode, ranked: t.ranked, waited: Math.round(w / 1000), found, cap: cfg.cap, stage: w >= this.max - 5000 ? 'filling' : 'searching' }; }
   window(waitMs) { return WINDOW0 + WINDOW_PER_SEC * (waitMs / 1000); }
   // Gruppe um das älteste Ticket des Modus bilden (Rang-Fenster beidseitig, Platz begrenzt)
   group(anchor) {
     const cfg = MM_MODES[anchor.mode], g = [anchor]; let humans = anchor.members.length; const t0 = this.now();
-    for (const t of [...this.tickets.values()].filter(x => x.mode === anchor.mode && x !== anchor).sort((a, b) => a.since - b.since)) {
+    for (const t of [...this.tickets.values()].filter(x => x.mode === anchor.mode && x.ranked === anchor.ranked && x !== anchor).sort((a, b) => a.since - b.since)) {
       if (humans + t.members.length > cfg.cap) continue;
       const w = Math.max(t0 - anchor.since, t0 - t.since);
       if (Math.abs(anchor.rating - t.rating) > this.window(w)) continue;
@@ -52,15 +52,15 @@ export class Matchmaker {
   tick() {
     const t0 = this.now();
     for (const t of [...this.tickets.values()]) if (!this.valid(t)) this.cancel(t.id, 'Die Suche wurde beendet, weil sich die Party geändert hat.');
-    for (const mode of Object.keys(MM_MODES)) {
+    for (const mode of Object.keys(MM_MODES)) for (const ranked of [true, false]) {   // Ranked und Locker haben getrennte Warteschlangen
       for (;;) {   // mehrere Matches pro Modus pro Durchlauf möglich
-        const anchor = [...this.tickets.values()].filter(x => x.mode === mode).sort((a, b) => a.since - b.since)[0]; if (!anchor) break;
+        const anchor = [...this.tickets.values()].filter(x => x.mode === mode && x.ranked === ranked).sort((a, b) => a.since - b.since)[0]; if (!anchor) break;
         const cfg = MM_MODES[mode], { g, humans } = this.group(anchor), wait = t0 - anchor.since;
         const full = humans >= cfg.cap, ready = humans >= cfg.minStart && wait >= this.soft, late = wait >= this.max;
         if (!(full || ready || late)) break;
         for (const t of g) this.drop(t);
         const bots = cfg.bots ? Math.max(0, cfg.bots - humans) : 0; this.stats.matches++; if (humans < cfg.cap) this.stats.filled++;
-        this.onMatch({ mode, tickets: g, humans, bots, filled: humans < cfg.cap });
+        this.onMatch({ mode, ranked, tickets: g, humans, bots, filled: humans < cfg.cap });
       }
     }
     // Status an alle noch wartenden Tickets

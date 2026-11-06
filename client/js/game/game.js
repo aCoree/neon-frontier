@@ -35,7 +35,7 @@ export class Game {
     this.player = new LocalPlayer(this.pctx); this.combat = new Combat(this.pctx);
     this.menuChar = null; this.char = null; this.prog = Progress.d;
     this.rctx = { onRemoteSwap: (e) => audio.swap(e.pos), onRemoteReload: (e, d) => audio.reload(d.cls, e.pos, d.reload), onRemoteStep: (e) => this.stepSound(e.pos, e.fl), onRemoteLand: (e) => audio.step('concrete', e.pos, 0.7), plateOK: (e) => this.plateOK(e), camPos: this.camera.position, showBars: (e) => this.showBars(e) };
-    this.input.onLockChange = (l) => { if (this.mode === 'play' && !l && !this.matchEnded && this.ctrlWanted) this.ui.pause(true); else if (l) this.ui.pause(false); this.paused = !l && this.mode === 'play'; };
+    this.input.onLockChange = (l) => { if (this.mode === 'play' && !l && !this.matchEnded && this.ctrlWanted && !this.mapOpen) this.ui.pause(true); else if (l) this.ui.pause(false); this.paused = !l && this.mode === 'play' && !this.mapOpen; };
     this.todTimer = 0; this.buildDuck();
   }
   freshStats() { return { kills: 0, deaths: 0, hs: 0, dmg: 0, best: 0, shards: 0, chests: 0, botKills: 0 }; }

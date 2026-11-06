@@ -15,7 +15,7 @@ const GLOBAL_EV = new Set(['kill', 'clock', 'end', 'go', 'iact', 'pick', 'pickr'
 export class Room {
   constructor(code, opts = {}) {
     this.hooks = opts.hooks || null; this.code = code; this.members = new Map(); this.ents = new Map(); this.state = 'lobby'; this.hostId = null;
-    this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, ...(opts.settings || {}) };
+    this.settings = { mode: 'ffa', bots: 3, diff: 'normal', scoreLimit: 0, timeLimit: 6, tod: 'day', fillBots: true, training: false, ...(opts.settings || {}), ranked: opts.ranked === true };   // Ranked kann nur der Server setzen (Matchmaking), nie ein Client über die Einstellungen
     this.local = !!opts.local;
     this.T = 0; this.last = Date.now(); this.tickN = 0; this.ev = []; this.emptyAt = 0;
     this.rng = mulberry32((Date.now() & 0xffffff) ^ 0x5bd1e995);
@@ -55,7 +55,7 @@ export class Room {
     return m;
   }
   lobbyData() {
-    return { k: 'lobby', code: this.code, auto: this.mm ? 1 : 0, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level, acct: m.userId ? 1 : 0 })) };
+    return { k: 'lobby', code: this.code, ranked: this.settings.ranked ? 1 : 0, auto: this.mm ? 1 : 0, host: this.hostId, state: this.state, settings: this.settings, modes: undefined, members: [...this.members.values()].filter(m => m.connected).map(m => ({ id: m.id, name: m.name, skin: m.skin, wskin: m.wskin, team: m.team, level: m.level, acct: m.userId ? 1 : 0 })) };
   }
   lobbyUpdate() { this.all(this.lobbyData()); }
   removeMember(m, hard = true) {
@@ -84,7 +84,13 @@ export class Room {
         const now = Date.now(); m.chatBurst = Math.max(0, m.chatBurst - (now - m.lastChat) / 1500); m.lastChat = now;
         if (++m.chatBurst > 4) { this.send(m, { k: 'toast', text: 'Nicht so schnell – Chat-Spam-Schutz.' }); return; }
         let t = clean(msg.text, 140); if (!t) return; if (this.hooks?.filter) t = this.hooks.filter(t);
-        const out = { k: 'chat', id: m.id, from: m.name, team: m.ent ? m.ent.team : m.team, text: t };
+        const myTeam = m.ent ? m.ent.team : m.team, out = { k: 'chat', id: m.id, from: m.name, team: myTeam, text: t };
+        if (msg.scope === 'team') {   // Team-Chat: nur Mitglieder desselben Teams bekommen die Nachricht (Gegner erfahren nichts)
+          if (!(myTeam >= 0)) { this.send(m, { k: 'toast', text: 'Team-Chat gibt es nur in Team-Modi.' }); return; }
+          out.scope = 'team';
+          for (const o of this.members.values()) if ((o.ent ? o.ent.team : o.team) === myTeam && !(m.userId && o.muted.has(String(m.userId)))) this.send(o, out);
+          return;
+        }
         for (const o of this.members.values()) if (!(m.userId && o.muted.has(String(m.userId)))) this.send(o, out);
         return;
       }
@@ -534,7 +540,7 @@ export class Room {
     this.flush(true);
     if (this.hooks?.matchEnd && !this.settings.training) {
       const humans = [...this.ents.values()].filter(e => !e.isBot).length, secs = this.T - (this.matchStart || 0);
-      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: true }));
+      const results = [...this.ents.values()].filter(e => e.member && e.member.userId).map(e => ({ member: e.member, userId: e.member.userId, kills: e.kills, deaths: e.deaths, hs: e.hs, dmg: e.dmgDealt, won: mode.teams ? e.team === winnerTeam : e.id === winnerId, secs, humans, ranked: !!this.settings.ranked }));
       try { this.hooks.matchEnd(this, this.matchId, results); } catch (err) { console.error('[room] matchEnd-Hook', err); }
     }
   }

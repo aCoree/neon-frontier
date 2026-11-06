@@ -125,7 +125,7 @@
   <div class="panel wide">
     <header><button class="back" data-back>‹ Zurück</button><h2>Spielen</h2></header>
     <div class="play-grid">
-      <button class="ptile hot" data-go="mm"><i>⚔</i><b>Match suchen</b><span id="mm-sub">Online gegen andere Spieler – nach Rang</span><em>EMPFOHLEN</em></button>
+      <button class="ptile hot" data-go="mm"><i>⚔</i><b>Match suchen</b><span id="mm-sub">Online gegen andere Spieler – locker oder Ranked</span><em>EMPFOHLEN</em></button>
       <button class="ptile" data-go="solo"><i>▶</i><b>Gegen Bots</b><span>Alle Modi, du stellst Schwierigkeit und Dauer ein</span></button>
       <button class="ptile" data-go="multi"><i>◈</i><b>Multiplayer</b><span>Offene Räume ansehen oder per Raumcode beitreten</span></button>
       <button class="ptile" data-act="private"><i>⚿</i><b>Private Lobby</b><span>Eigene Lobby mit Einladungslink für Freunde</span></button>
@@ -155,6 +155,7 @@
     <div id="mm-guest" class="empty" style="display:none">Matchmaking braucht ein Konto (Rang &amp; Party). <button class="link" id="mm-login">Anmelden</button> – oder nutze „Multiplayer“ für offene Räume.</div>
     <div id="mm-main">
       <h4>Spielmodus</h4><div class="cards" id="mm-modes"></div>
+      <button class="rk-toggle" id="mm-ranked" role="switch" aria-checked="false"><span class="rk-sw"><i></i></span><span class="rk-txt"><b>RANKED <em id="mm-ranked-state">AUS</em></b><small id="mm-ranked-desc"></small></span></button>
       <p class="hint" id="mm-hint"></p>
       <p class="hint">Du wirst nach Rang mit anderen Spielern zusammengebracht. Findet sich nach kurzer Zeit niemand, startet das Match mit Bots als Auffüllung – das siehst du vorher im Suchfenster.</p>
       <div class="row end"><button class="btn primary big" id="mm-start">Suche starten</button></div>
@@ -212,7 +213,7 @@
 <!-- ================= LOBBY ================= -->
 <section id="s-lobby" class="screen">
   <div class="panel full">
-    <header><button class="back" id="lobby-leave">‹ Verlassen</button><h2>Lobby</h2>
+    <header><button class="back" id="lobby-leave">‹ Verlassen</button><h2>Lobby <span class="rk-flag" id="lobby-ranked" style="display:none">RANKED</span></h2>
       <div class="invite"><span>Raumcode</span><b id="lobby-code">----</b><button class="btn small" id="lobby-copy">Einladungslink kopieren</button></div></header>
     <div class="lobby-grid">
       <div class="lobby-col">
@@ -297,7 +298,7 @@
       <table>
         <tr><td>W A S D</td><td>Bewegen</td></tr><tr><td>Maus</td><td>Umsehen</td></tr><tr><td>Linke Maustaste</td><td>Schießen</td></tr><tr><td>Rechte Maustaste</td><td>Zielen (Visier / Zoom)</td></tr>
         <tr><td>Shift</td><td>Sprinten</td></tr><tr><td>Leertaste</td><td>Springen (2× = Doppelsprung, mit Jetpack halten)</td></tr><tr><td>C / Strg</td><td>Ducken</td></tr><tr><td>Q</td><td>Dash / Ausweichen</td></tr>
-        <tr><td>R</td><td>Nachladen</td></tr><tr><td>B (halten) + 1–8</td><td>Emote (Sprechblase über dem Kopf)</td></tr><tr><td>1–5 / Mausrad</td><td>Waffe wechseln</td></tr><tr><td>E</td><td>Interagieren (Kisten, Schalter, Geheimnisse)</td></tr>
+        <tr><td>R</td><td>Nachladen</td></tr><tr><td>M</td><td>Karte (Teammates, Orte, „Ich bin in …“ ans Team)</td></tr><tr><td>Enter / <code>/t</code> Text</td><td>Chat an alle / nur ans Team</td></tr><tr><td>B (halten) + 1–8</td><td>Emote (Sprechblase über dem Kopf)</td></tr><tr><td>1–5 / Mausrad</td><td>Waffe wechseln</td></tr><tr><td>E</td><td>Interagieren (Kisten, Schalter, Geheimnisse)</td></tr>
       </table>
       <table>
         <tr><td>Z</td><td>Medkit (+55 Leben)</td></tr><tr><td>X</td><td>Schildtrank (+50 Schild)</td></tr><tr><td>G</td><td>Splittergranate werfen</td></tr><tr><td>H</td><td>Rauchbombe werfen</td></tr>
@@ -363,6 +364,11 @@
 <div id="conn"></div>
 <div id="toasts"></div>
 <div id="notifs" aria-live="polite"></div>
+<div id="bigmap" class="bigmap"><div class="bm-box">
+  <header><h2>Karte</h2><span class="bm-hint">M / Esc = schließen</span><button class="btn small" id="bm-close">✕</button></header>
+  <div class="bm-body"><canvas id="bm-cv" width="720" height="720"></canvas>
+    <aside><h4>Team</h4><div id="bm-team"></div><h4>Nachricht ans Team</h4><div id="bm-quick"></div><input id="bm-in" maxlength="120" placeholder="Eigene Nachricht … (Enter)" autocomplete="off"><small id="bm-note"></small></aside></div>
+</div></div>
 <div id="mm-bar" role="status" aria-live="polite"><div class="mmb-spin"></div><div class="mmb-txt"><b id="mmb-title">Suche läuft …</b><small id="mmb-sub"></small></div><span id="mmb-time">0:00</span><button class="btn small danger" id="mmb-cancel">Abbrechen</button></div>
 <div id="dlg" class="dlg" aria-hidden="true"><div class="dlg-box" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
   <h3 id="dlg-title"></h3><div id="dlg-body"></div><input id="dlg-input" autocomplete="off" spellcheck="false"><div class="dlg-err" id="dlg-err"></div>

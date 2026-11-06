@@ -206,6 +206,14 @@ assert.match((await mq(pG.sk, 'v2')).error, /Party-Leiter/); assert.match((await
 assert.equal((await mq(pF.sk, 'v2')).ok, true); const pf1 = await pF.sk.wait('mm_found', 5000), pf2 = await pG.sk.wait('mm_found', 5000); assert.ok(pf1 && pf2 && pf1.code === pf2.code && pf1.humans === 2 && pf1.filled === true); const pr = app.rooms.get(pf1.code); assert.equal(pr.mm.expect.size, 2); kill(pf1.code); ok('Eine Party sucht gemeinsam: beide Mitglieder landen im selben Match');
 await mq(pF.sk, 'v2'); pG.sk.ws.send(JSON.stringify({ k: 'party_leave' })); const pc = await pF.sk.wait('mm_cancelled', 3000); assert.ok(pc && /Party/.test(pc.reason)); ok('Ändert sich die Party während der Suche, wird die Suche beendet');
 await call('POST', '/api/admin/flag', { key: 'matchmaking', value: false }, ow.token); mD.sk.got.forEach(m => { m._seen = true; }); assert.match((await mq(mD.sk, 'ffa')).error, /deaktiviert/); await call('POST', '/api/admin/flag', { key: 'matchmaking', value: true }, ow.token); ok('Feature-Flag schaltet das Matchmaking ab');
+const rkq = async (sock, mode, ranked) => { sock.ws.send(JSON.stringify({ k: 'mm_queue', mode, ranked })); return sock.wait('party_result'); };
+const [rk1, rk2, rk3, rk4] = [await mkUser('Rkaa', '17.0.0.1'), await mkUser('Rkbb', '17.0.0.2'), await mkUser('Rkcc', '17.0.0.3'), await mkUser('Rkdd', '17.0.0.4')];
+await rkq(rk1.sk, 'duel', true); await rkq(rk2.sk, 'duel', false); await q_nap(1300); assert.equal(app.mm.size(), 2); ok('Ranked- und Locker-Suchende werden nicht zusammengelegt');
+await rkq(rk3.sk, 'duel', true); await rkq(rk4.sk, 'duel', false);
+const [fr1, fr3, fr2, fr4] = [await rk1.sk.wait('mm_found', 4000), await rk3.sk.wait('mm_found', 4000), await rk2.sk.wait('mm_found', 4000), await rk4.sk.wait('mm_found', 4000)];
+assert.ok(fr1 && fr1.ranked === true && fr1.code === fr3.code && app.rooms.get(fr1.code).settings.ranked === true); assert.ok(fr2 && fr2.ranked === false && fr2.code === fr4.code && app.rooms.get(fr2.code).settings.ranked === false); ok('Ranked-Spieler landen in einem Ranked-Raum, lockere in einem lockeren – der Server meldet es mit');
+const fk = await wsHello({ token: rk1.u.token }); fk.ws.send(JSON.stringify({ k: 'create', settings: { mode: 'duel', ranked: true } })); await q_nap(300); const fkr = [...app.rooms.values()].find(r => [...r.members.values()].some(m => m.name === 'Rkaa') && !r.mm && r.code !== fr1.code); assert.ok(fkr && fkr.settings.ranked === false); fk.ws.close(); ok('Eine selbst erstellte Lobby kann nicht auf „ranked“ gesetzt werden (kein Rang-Boosten mit Freunden)');
+kill(fr1.code); kill(fr2.code); for (const x of [rk1, rk2, rk3, rk4]) x.sk.ws.close();
 for (const x of [mA, mB, mC, mD, mE, pF, pG]) x.sk.ws.close();
 
 console.log('Profil, Online-Status, Version');

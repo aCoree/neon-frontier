@@ -210,3 +210,18 @@ input:focus{border-color:var(--c1);box-shadow:0 0 12px rgba(126,232,255,.25)}
 .pf-since{color:var(--dim);font:600 12px var(--font);margin:8px 0 0;text-align:right}#pf-actions{margin-top:8px}
 #build-info{display:block;margin-top:4px;color:var(--dim);font:600 11px var(--font);opacity:.8}#build-info.warn{color:#ffb347;opacity:1}
 .sdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#556;margin-right:6px;vertical-align:middle}.sdot.on{background:var(--good,#4dff8a);box-shadow:0 0 6px var(--good,#4dff8a)}
+
+/* Karte */
+.bigmap{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(3,6,14,.82);backdrop-filter:blur(6px)}.bigmap.show{display:flex}
+.bm-box{background:var(--bg);border:1px solid var(--line);padding:14px 18px;max-width:96vw;max-height:96vh;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px))}.bm-box header{display:flex;align-items:center;gap:14px;margin-bottom:8px}.bm-box h2{margin:0;font:800 24px var(--disp);letter-spacing:.08em;text-transform:uppercase}.bm-hint{color:var(--dim);font:600 13px var(--font);flex:1}
+.bm-body{display:flex;gap:16px;align-items:flex-start}#bm-cv{width:min(76vh,58vw);height:min(76vh,58vw);border:1px solid var(--line);cursor:crosshair;background:#08101e}.bm-body aside{width:300px;max-width:30vw;display:flex;flex-direction:column;gap:6px}.bm-body aside h4{margin:8px 0 2px}
+.bm-m{display:flex;align-items:center;gap:8px;padding:3px 0}.bm-m i{width:12px;height:12px;border-radius:50%;border:2px solid #fff;flex:none}.bm-m b{font:800 15px var(--font)}.bm-m small{color:var(--dim);font:600 13px var(--font);margin-left:auto;text-align:right}
+#bm-quick{display:flex;flex-direction:column;gap:5px}#bm-quick .btn{text-align:left;font-size:13px;padding:6px 10px;text-transform:none;letter-spacing:.02em}#bm-in{width:100%;margin-top:4px}#bm-note{color:var(--dim);font:600 12px var(--font)}
+.tc{color:#7ee8ff;font-style:normal;font-weight:800;margin-right:4px}
+/* Ranked */
+.rk-toggle{display:flex;align-items:center;gap:16px;width:100%;margin:14px 0 4px;padding:14px 18px;border:2px solid var(--line);background:rgba(255,255,255,.04);color:var(--txt);cursor:pointer;text-align:left;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,0 100%);transition:.15s}
+.rk-toggle .rk-sw{width:64px;height:32px;border-radius:16px;background:#2a3346;position:relative;flex:none;transition:.15s}.rk-toggle .rk-sw i{position:absolute;left:3px;top:3px;width:26px;height:26px;border-radius:50%;background:#8fa6c4;transition:.15s}
+.rk-toggle .rk-txt b{display:block;font:900 24px var(--disp);letter-spacing:.1em}.rk-toggle .rk-txt em{font-style:normal;color:var(--dim)}.rk-toggle .rk-txt small{display:block;color:var(--dim);font:600 14px var(--font);margin-top:2px}
+.rk-toggle.on{border-color:var(--c3);background:linear-gradient(90deg,rgba(255,170,40,.22),rgba(8,14,28,.3))}.rk-toggle.on .rk-sw{background:var(--c3)}.rk-toggle.on .rk-sw i{left:35px;background:#fff}.rk-toggle.on em{color:var(--c3)}
+.rk-flag{font:800 13px var(--font);letter-spacing:.2em;color:#0a0f1c;background:var(--c3);padding:2px 10px;vertical-align:middle;margin-left:8px;clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%)}
+.plink{cursor:pointer}.plink:hover{color:var(--c1);text-decoration:underline}

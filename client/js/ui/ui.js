@@ -4,6 +4,7 @@ import { Progress } from '../game/progress.js';
 import { audio } from '../game/audio.js';
 import { QUALITY } from '../render/engine.js';
 import { Minimap } from './minimap.js';
+import { BigMap } from './bigmap.js';
 import { SERVER_URL } from '../config.js';
 import { resolveServerUrl } from '../game/net.js';
 import { Account } from '../game/account.js';
@@ -20,7 +21,7 @@ export class UI {
     this.hud = new Hud(this, game); this.deadTimer = null; this.lastLobby = null; this.myId = null; this.chatOpen = false;
   }
   init() {
-    const g = this.g; this.wireSocial();
+    const g = this.g; this.wireSocial(); this.map = new BigMap(g);
     $('#pp-leave').onclick = async () => { if (await this.confirm({ title: 'Party verlassen?', lines: ['Du verlässt die Party.'], ok: 'Verlassen', danger: true })) { const r = await Social.cmd({ k: 'party_leave' }); if (!r.ok) this.toast(r.error, 'bad'); } };
     $('#pp-add').onclick = () => { audio.click(); this.go('friends'); };
     // Navigation
@@ -167,7 +168,7 @@ export class UI {
     sm.textContent = s.rankPoints + ' Rangpunkte' + (s.nextRank ? ' · noch ' + (s.nextRankAt - s.rankPoints) + ' bis ' + s.nextRank : ' · höchster Rang') + (s.bestRank !== s.rank ? ' · Bestwert: ' + s.bestRank : '');
     const bar = document.createElement('div'); bar.className = 'rk-bar'; const bi = document.createElement('i'); bi.style.background = col; bi.style.width = (s.nextRankAt ? Math.max(3, 100 * (s.rankPoints - s.rankMin) / (s.nextRankAt - s.rankMin)) : 100) + '%'; bar.appendChild(bi);
     const tiers = document.createElement('div'); tiers.className = 'rk-tiers'; for (const r of ranks) { const t = document.createElement('span'); t.textContent = r.name + ' ' + r.min; if (r.name === s.rank) { t.className = 'cur'; t.style.background = col; t.style.borderColor = col; } tiers.appendChild(t); }
-    info.append(rn, sm, bar, tiers); rb.append(badge, info); rb.title = 'Rangpunkte gibt es nur in Matches mit mindestens 2 Spielern (z. B. „Match suchen“): Sieg +25 bis +40, Niederlage bis −15.';
+    info.append(rn, sm, bar, tiers); rb.append(badge, info); rb.title = 'Rangpunkte gibt es nur in Ranked-Matches (Spielen → Match suchen → Ranked AN) mit mindestens 2 echten Spielern: Sieg +25 bis +40, Niederlage bis −15.';
     // Statistiken
     const losses = Math.max(0, s.matches - s.wins), wr = s.matches ? Math.round(100 * s.wins / s.matches) + ' %' : '–', hs = s.kills ? Math.round(100 * s.headshots / s.kills) + ' %' : '–';
     const grid = $('#pf-stats'); for (const [v, l] of [[s.matches, 'Matches'], [s.wins, 'Siege'], [losses, 'Niederlagen'], [wr, 'Siegquote'], [s.kd, 'K/D'], [s.kills, 'Kills'], [s.deaths, 'Tode'], [s.headshots, 'Kopftreffer'], [hs, 'HS-Quote']]) { const c = document.createElement('div'); c.className = 'pf-st'; const b = document.createElement('b'); b.textContent = v; const sg = document.createElement('small'); sg.textContent = l; c.append(b, sg); grid.appendChild(c); }
@@ -261,13 +262,16 @@ export class UI {
       const b = document.createElement('b'); b.textContent = md.name; const sp = document.createElement('span'); sp.textContent = bad ? 'Zu groß für deine Party (' + size + ')' : md.desc; c.append(b, sp);
       c.onclick = () => { if (bad) { audio.error(); return; } audio.click(); this.mmMode = id; Progress.d.settings.mmMode = id; Progress.save(); this.openMatchmaking(); }; box.appendChild(c);
     }
+    const rk = $('#mm-ranked'), on = !!Progress.d.settings.mmRanked; rk.classList.toggle('on', on); rk.setAttribute('aria-checked', on); $('#mm-ranked-state').textContent = on ? 'AN' : 'AUS';
+    $('#mm-ranked-desc').textContent = on ? 'Rangpunkte (+/−) und volle Saisonpunkte. Zählt nur, wenn mindestens 2 echte Spieler im Match sind.' : 'Lockeres Spiel: XP und Münzen, aber keine Rangpunkte.';
+    rk.onclick = () => { audio.click(); Progress.d.settings.mmRanked = !on; Progress.save(); this.openMatchmaking(); };
     const leader = !p || p.isLeader; $('#mm-hint').textContent = p ? (leader ? 'Deine Party (' + size + ' Spieler) sucht gemeinsam.' : 'Nur der Party-Leiter kann die Suche starten.') : '';
     const st = $('#mm-start'); st.disabled = !leader || !!this._mm || !Social.connected; st.textContent = this._mm ? 'Suche läuft …' : (Social.connected ? 'Suche starten' : 'Verbinde …');
-    st.onclick = async () => { audio.click(); st.disabled = true; const r = await Social.cmd({ k: 'mm_queue', mode: this.mmMode }); if (!r.ok) { this.toast(r.error || 'Suche fehlgeschlagen', 'bad'); audio.error(); st.disabled = false; } else { this.back(); } };
+    st.onclick = async () => { audio.click(); st.disabled = true; const r = await Social.cmd({ k: 'mm_queue', mode: this.mmMode, ranked: !!Progress.d.settings.mmRanked }); if (!r.ok) { this.toast(r.error || 'Suche fehlgeschlagen', 'bad'); audio.error(); st.disabled = false; } else { this.back(); } };
   }
   mmStatus(m) {
     this._mm = m; const bar = $('#mm-bar'); bar.classList.remove('found'); bar.classList.add('show'); const md = MODES[m.mode]?.name || m.mode, p = this._party;
-    $('#mmb-title').textContent = m.stage === 'filling' ? 'Keine weiteren Spieler – Bots füllen auf' : 'Suche Spieler · ' + md;
+    $('#mmb-title').textContent = m.stage === 'filling' ? 'Keine weiteren Spieler – Bots füllen auf' : (m.ranked ? 'Ranked · ' : 'Suche · ') + md;
     $('#mmb-sub').textContent = m.stage === 'filling' ? md + ' startet gleich' : m.found + ' von ' + m.cap + ' Spielern gefunden' + (p ? ' · Party' : '');
     const s = m.waited | 0; $('#mmb-time').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     $('#mmb-cancel').style.display = !p || p.isLeader ? '' : 'none'; $('#mmb-cancel').onclick = async () => { audio.back(); const r = await Social.cmd({ k: 'mm_cancel' }); if (!r.ok) this.toast(r.error, 'bad'); };
@@ -275,7 +279,7 @@ export class UI {
   }
   mmHide() { this._mm = null; $('#mm-bar').classList.remove('show', 'found'); $('#mm-sub').textContent = 'Gegen Spieler online'; if (this.cur === 'mm') this.openMatchmaking(); }
   mmFound(m) {
-    this._mm = null; const bar = $('#mm-bar'); bar.classList.add('show', 'found'); $('#mmb-title').textContent = 'Match gefunden!'; $('#mmb-sub').textContent = (MODES[m.mode]?.name || m.mode) + ' · ' + m.humans + (m.humans === 1 ? ' Spieler' : ' Spieler') + (m.filled ? ' + Bots' : '');
+    this._mm = null; const bar = $('#mm-bar'); bar.classList.add('show', 'found'); $('#mmb-title').textContent = 'Match gefunden!'; $('#mmb-sub').textContent = (m.ranked ? 'RANKED · ' : '') + (MODES[m.mode]?.name || m.mode) + ' · ' + m.humans + (m.humans === 1 ? ' Spieler' : ' Spieler') + (m.filled ? ' + Bots' : '');
     $('#mmb-time').textContent = ''; $('#mmb-cancel').style.display = 'none'; $('#mm-sub').textContent = 'Gegen Spieler online'; audio.levelUp(); setTimeout(() => bar.classList.remove('show', 'found'), 3500);
     if (this.inMatchNow()) { this.toast('Match gefunden – nach dem laufenden Match bitte beitreten (Code ' + m.code + ')', 'event'); return; }
     this.joinRoom(m.code);
@@ -300,7 +304,7 @@ export class UI {
     for (const m of p.members) {
       const sk = SKINS.find(x => x.id === m.skin) || SKINS[0], row = document.createElement('div'); row.className = 'pp-m';
       const av = document.createElement('span'); av.className = 'av'; av.textContent = m.name.slice(0, 1).toUpperCase(); av.style.background = sk.armor; av.style.borderColor = sk.accent;
-      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m.name; const lv = document.createElement('small'); lv.textContent = 'Lv ' + m.level; nm.appendChild(lv);
+      const nm = document.createElement('span'); nm.className = 'nm plink'; nm.title = 'Profil ansehen'; nm.onclick = () => { audio.click(); this.openProfile(m.you ? null : m.name); }; nm.textContent = m.name; const lv = document.createElement('small'); lv.textContent = 'Lv ' + m.level; nm.appendChild(lv);
       const dot = document.createElement('span'); dot.className = 'on' + (m.online ? '' : ' off'); dot.title = m.online ? 'online' : 'Verbindung verloren';
       row.append(av, nm); if (m.leader) { const c = document.createElement('span'); c.className = 'crown'; c.textContent = '♛'; c.title = 'Party-Leiter'; row.appendChild(c); } row.appendChild(dot);
       if (p.isLeader && !m.you) {
@@ -328,6 +332,9 @@ export class UI {
     if (this._lfTimer) return; this.refreshLobbyFriends();
     this._lfTimer = setInterval(() => { if (this.cur === 'lobby') this.refreshLobbyFriends(); else { clearInterval(this._lfTimer); this._lfTimer = null; } }, 8000);
   }
+
+  // Chat senden: "/t Text" geht nur ans Team
+  sendChat(raw) { const m = /^\/t(?:eam)?\s+([\s\S]+)/i.exec(String(raw).trim()); this.g.send(m ? { k: 'chat', text: m[1], scope: 'team' } : { k: 'chat', text: raw }); }
 
   // ---------- Emote-Rad ----------
   buildEmoteWheel() {
@@ -524,7 +531,7 @@ export class UI {
   setLobby(d, myId) {
     this.myId = myId; this.lastLobby = d; const g = this.g, S = d.settings, mode = MODES[S.mode], host = d.host === myId && !d.auto;
     if (this.cur !== 'lobby' && !g.inMatch && this.cur !== 'hud') this.showScreenKeep('lobby');
-    $('#lobby-code').textContent = d.code; this.lobbyFriendsTick(); { const sig = d.members.map(m => m.id).join(); if (sig !== this._lfSig) { this._lfSig = sig; this.refreshLobbyFriends(); } }
+    $('#lobby-code').textContent = d.code; $('#lobby-ranked').style.display = d.ranked ? '' : 'none'; this.lobbyFriendsTick(); { const sig = d.members.map(m => m.id).join(); if (sig !== this._lfSig) { this._lfSig = sig; this.refreshLobbyFriends(); } }
     $('#lobby-count').textContent = `(${d.members.length})`;
     $$('#lobby-modes .card').forEach(c => c.classList.toggle('on', c.dataset.id === S.mode)); $('#lobby-modes').classList.toggle('locked', !host);
     const mark = (sel, v) => $$(sel + ' button').forEach(b => b.classList.toggle('on', b.dataset.v == v));
@@ -536,7 +543,8 @@ export class UI {
     $('#lobby-wait').textContent = d.auto ? 'Das Match startet automatisch, sobald alle da sind …' : host ? `${mode.name} · bis zu ${mode.max} Spieler` : 'Warte auf den Host …';
     // Spielerliste
     const box = $('#lobby-teams'); box.innerHTML = '';
-    const mk = (m) => { const t = TEAMS[m.team]; const row = document.createElement('div'); row.className = 'pl' + (m.id === myId ? ' you' : ''); const sk = SKINS.find(x => x.id === m.skin) || SKINS[0]; row.innerHTML = `<span class="av" style="background:${sk.armor};border-color:${t ? t.color : sk.accent}">${esc((m.name || '?').slice(0, 1).toUpperCase())}</span><span>${esc(m.name)}</span><span class="lv">LV ${m.level || 1}</span>${m.id === d.host ? '<span class="crown" title="Host">♛</span><span class="host">HOST</span>' : ''}`; if (host && m.id !== myId) { const k = document.createElement('button'); k.className = 'kick'; k.textContent = '✕'; k.title = 'Entfernen'; k.onclick = () => g.send({ k: 'kick', id: m.id }); row.appendChild(k); } return row; };
+    const mk = (m) => { const t = TEAMS[m.team]; const row = document.createElement('div'); row.className = 'pl' + (m.id === myId ? ' you' : ''); const sk = SKINS.find(x => x.id === m.skin) || SKINS[0]; row.innerHTML = `<span class="av" style="background:${sk.armor};border-color:${t ? t.color : sk.accent}">${esc((m.name || '?').slice(0, 1).toUpperCase())}</span><span>${esc(m.name)}</span><span class="lv">LV ${m.level || 1}</span>${m.id === d.host ? '<span class="crown" title="Host">♛</span><span class="host">HOST</span>' : ''}`; if (m.acct) for (const ch of [row.children[0], row.children[1]]) { ch.classList.add('plink'); ch.title = 'Profil ansehen'; ch.onclick = () => { audio.click(); this.openProfile(m.id === myId ? null : m.name); }; }
+      if (host && m.id !== myId) { const k = document.createElement('button'); k.className = 'kick'; k.textContent = '✕'; k.title = 'Entfernen'; k.onclick = () => g.send({ k: 'kick', id: m.id }); row.appendChild(k); } return row; };
     if (!mode.teams) { const t = document.createElement('div'); t.className = 'team'; t.innerHTML = `<div class="th">Spieler</div>`; d.members.forEach(m => t.appendChild(mk(m))); const bots = mode.size ? 0 : S.bots; if (bots) { const r = document.createElement('div'); r.className = 'pl'; r.innerHTML = `<span class="dot" style="background:#ffd27a"></span><span style="color:var(--dim)">+ ${Math.min(bots, mode.max - d.members.length)} Bots (${DIFFS[S.diff].name})</span>`; t.appendChild(r); } box.appendChild(t); }
     else {
       const unassigned = d.members.filter(m => m.team < 0 || m.team >= mode.teams);
@@ -553,7 +561,7 @@ export class UI {
     }
   }
   chat(m) {
-    const line = `<div><b style="color:${m.team >= 0 ? TEAMS[m.team].color : 'var(--c1)'}">${esc(m.from)}</b>: ${esc(m.text)}</div>`;
+    const line = `<div>${m.scope === 'team' ? '<i class="tc">[TEAM]</i>' : ''}<b style="color:${m.team >= 0 ? TEAMS[m.team].color : 'var(--c1)'}">${esc(m.from)}</b>: ${esc(m.text)}</div>`;
     for (const sel of ['#lobby-chat', '#chatlog']) { const box = $(sel); box.insertAdjacentHTML('beforeend', line); while (box.children.length > 40) box.firstChild.remove(); box.scrollTop = box.scrollHeight; }
     if (this.g.mode === 'play') audio.hover();
   }
@@ -630,8 +638,10 @@ export class UI {
   onKey(e) {
     const g = this.g;
     if (g.mode !== 'play' || !g.inMatch) return;
+    if (e.code === 'KeyM' && !/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName || '') && !this.chatOpen) { e.preventDefault(); this.map.toggle(); return; }
+    if (e.code === 'Escape' && this.map.open) { e.preventDefault(); this.map.close(); return; }
     if (e.code === 'Tab') { e.preventDefault(); this.hud.showBoard(true); }
-    if (e.code === 'Enter') { const inp = $('#chat-in'); if (!this.chatOpen) { if (g.net?.kind === 'local') return; this.chatOpen = true; inp.style.display = 'block'; g.input.enabled = true; inp.focus(); e.preventDefault(); } else { if (inp.value.trim()) g.send({ k: 'chat', text: inp.value }); inp.value = ''; inp.style.display = 'none'; this.chatOpen = false; inp.blur(); } }
+    if (e.code === 'Enter') { const inp = $('#chat-in'); if (!this.chatOpen) { if (g.net?.kind === 'local') return; this.chatOpen = true; inp.style.display = 'block'; g.input.enabled = true; inp.focus(); e.preventDefault(); } else { if (inp.value.trim()) this.sendChat(inp.value); inp.value = ''; inp.style.display = 'none'; this.chatOpen = false; inp.blur(); } }
     if (e.code === 'Escape' && this.chatOpen) { $('#chat-in').style.display = 'none'; this.chatOpen = false; }
   }
   showClickHint() { $('#clickhint').classList.add('show'); }

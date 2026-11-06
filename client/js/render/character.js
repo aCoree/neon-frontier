@@ -140,8 +140,8 @@ export class Character {
       const geo = mergeGeometries(list); list.forEach(x => x.dispose());
       const sm = new THREE.SkinnedMesh(geo, mats[cls]);
       root.add(sm); sm.bind(skeleton, new THREE.Matrix4());
-      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1.7); (this.skinned || (this.skinned = [])).push(geo);   // Culling-Kugel folgt dem Charakter (siehe update)
-      sm.frustumCulled = true; sm.castShadow = cls === 'armor' || cls === 'cloth';
+      sm.frustumCulled = false;   // Skinned-Meshes haben eine eigene, einmal berechnete Kugel → sonst verschwindet der Körper je nach Position/Blickwinkel. 4 Meshes je Figur: Kosten vernachlässigbar.
+      sm.castShadow = cls === 'armor' || cls === 'cloth';
       sm.matrixAutoUpdate = false; sm.matrixWorldAutoUpdate = false; sm.matrixWorld.identity();   // Bones tragen bereits die Weltposition
     }
   }
@@ -211,7 +211,6 @@ export class Character {
 
   update(dt, s) {
     const R = this.root;
-    if (this.skinned) for (const g of this.skinned) g.boundingSphere.center.set(R.position.x, R.position.y + 1.0, R.position.z);
     this.spawnT = Math.min(1, this.spawnT + dt * 3);
     // ---------- Tod ----------
     if (!this.alive) {

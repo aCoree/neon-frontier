@@ -39,4 +39,14 @@ const roomOf = (mode, ps) => { const r = new Room('PT', { settings: { mode, bots
 { const { r, ms } = roomOf('v222', [3, 3, 4, 4, 0, 0]); r.autoAssign(); assert.equal(ms[0].team, ms[1].team); assert.equal(ms[2].team, ms[3].team); assert.notEqual(ms[0].team, ms[2].team); ok('3 Teams: zwei Parties bleiben jeweils zusammen und getrennt voneinander'); }
 { const { r, ms } = roomOf('tdm', [0, 0, 0, 0]); r.autoAssign(); assert.equal(ms.filter(m => m.team === 0).length, 2); ok('Ohne Party bleibt die ausgeglichene Zuteilung'); }
 
+console.log('Team-Chat & Ranked');
+{ const got = { a: [], b: [], c: [] }, mkc = (k) => ({ send(o, raw) { const x = raw ? JSON.parse(o) : o; if (x.k === 'chat' || x.k === 'toast') got[k].push(x); } });
+  const r = new Room('TC', { settings: { mode: 'tdm', bots: 0 } }); const a = r.addMember(mkc('a'), { name: 'A' }), b = r.addMember(mkc('b'), { name: 'B' }), c = r.addMember(mkc('c'), { name: 'C' });
+  a.team = 0; b.team = 0; c.team = 1; for (const k of Object.keys(got)) got[k].length = 0;
+  r.handle(a, { k: 'chat', text: 'Ich bin in Heartland', scope: 'team' }); assert.equal(got.a.length, 1); assert.equal(got.b.length, 1); assert.equal(got.c.length, 0); assert.equal(got.b[0].scope, 'team'); ok('Team-Chat: Teammates bekommen die Nachricht, der Gegner nicht');
+  r.handle(a, { k: 'chat', text: 'hallo alle' }); assert.equal(got.c.length, 1); ok('Normaler Chat geht weiterhin an alle');
+  const f = new Room('FF', { settings: { mode: 'ffa', bots: 0 } }); const x = f.addMember(mkc('a'), { name: 'X' }), y = f.addMember(mkc('b'), { name: 'Y' }); got.a.length = got.b.length = 0; f.handle(x, { k: 'chat', text: 'hi', scope: 'team' }); assert.equal(got.b.length, 0); assert.equal(got.a[0].k, 'toast'); ok('Im Free for All gibt es keinen Team-Chat (kein Leck an alle)'); }
+{ assert.equal(new Room('R1', { settings: { ranked: true } }).settings.ranked, false); assert.equal(new Room('R2', { settings: { mode: 'duel' }, ranked: true }).settings.ranked, true); ok('Ranked kann nicht über Raum-Einstellungen gefälscht werden – nur der Server setzt es'); }
+{ let res = null; for (const ranked of [false, true]) { const r = new Room('RK', { settings: { mode: 'ffa', bots: 0 }, ranked, hooks: { matchEnd: (_r, _id, results) => { res = results; } } }); r.addMember(mkClient(), { name: 'U1', userId: 1 }); r.addMember(mkClient(), { name: 'U2', userId: 2 }); r.start(); r.state = 'playing'; r.endMatch(); assert.equal(res.length, 2); assert.ok(res.every(x => x.ranked === ranked)); } ok('Match-Ergebnis meldet „ranked“ nur für Ranked-Räume (sonst gibt es keine Rangpunkte)'); }
+
 console.log(`\n${passed} Party-Tests bestanden`); process.exit(0);
